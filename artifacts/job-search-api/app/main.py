@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.api.v1.jobs import router as jobs_router
 from app.auth import _UnauthorizedError
 from app.config import get_settings
 
@@ -77,6 +78,9 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
         status_code=500,
         content=_error_body("InternalServerError", "An unexpected error occurred", 500),
     )
+
+
+app.include_router(jobs_router, prefix="/api/v1/jobs", tags=["jobs"])
 
 
 @app.get("/health", tags=["health"])
