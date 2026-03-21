@@ -32,6 +32,23 @@ app.add_middleware(
 )
 
 
+_HTTP_ERROR_SLUGS: dict[int, str] = {
+    400: "bad_request",
+    401: "unauthorized",
+    403: "forbidden",
+    404: "not_found",
+    405: "method_not_allowed",
+    408: "request_timeout",
+    409: "conflict",
+    410: "gone",
+    422: "unprocessable_entity",
+    429: "too_many_requests",
+    500: "internal_server_error",
+    502: "bad_gateway",
+    503: "service_unavailable",
+}
+
+
 def _error_body(error: str, message: str, status_code: int, details=None) -> dict:
     return {
         "error": error,
@@ -44,10 +61,11 @@ def _error_body(error: str, message: str, status_code: int, details=None) -> dic
 @app.exception_handler(StarletteHTTPException)
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    slug = _HTTP_ERROR_SLUGS.get(exc.status_code, f"http_{exc.status_code}")
     return JSONResponse(
         status_code=exc.status_code,
         content=_error_body(
-            type(exc).__name__,
+            slug,
             exc.detail if isinstance(exc.detail, str) else str(exc.detail),
             exc.status_code,
         ),
@@ -58,7 +76,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
 async def unauthorized_handler(request: Request, exc: _UnauthorizedError) -> JSONResponse:
     return JSONResponse(
         status_code=401,
-        content=_error_body("Unauthorized", exc.message, 401),
+        content=_error_body("unauthorized", exc.message, 401),
     )
 
 
@@ -68,7 +86,7 @@ async def validation_exception_handler(
 ) -> JSONResponse:
     return JSONResponse(
         status_code=422,
-        content=_error_body("ValidationError", "Request validation failed", 422),
+        content=_error_body("unprocessable_entity", "Request validation failed", 422),
     )
 
 
@@ -76,7 +94,7 @@ async def validation_exception_handler(
 async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(
         status_code=500,
-        content=_error_body("InternalServerError", "An unexpected error occurred", 500),
+        content=_error_body("internal_server_error", "An unexpected error occurred", 500),
     )
 
 
