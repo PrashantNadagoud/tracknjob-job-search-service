@@ -54,3 +54,28 @@ class JobSourceItem(BaseModel):
 
 class JobSourcesResponse(BaseModel):
     sources: list[JobSourceItem]
+
+
+class SavedSearchCreate(BaseModel):
+    name: str
+    filters: dict
+    alert_email: bool = False
+
+
+class SavedSearchResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    filters: dict
+    alert_email: bool
+    created_at: datetime | None = None
+
+
+class SavedSearchListResponse(BaseModel):
+    total: int
+    results: list[SavedSearchResponse]
+
+
+class HideJobRequest(BaseModel):
+    job_id: uuid.UUID

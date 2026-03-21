@@ -3,20 +3,24 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
 from app.db import get_db
-from app.models import HiddenJob, Listing
+from app.models import HiddenJob, Listing, SavedSearch
 from app.schemas.jobs import (
+    HideJobRequest,
     JobListingDetail,
     JobListingItem,
     JobSearchResponse,
     JobSourceItem,
     JobSourcesResponse,
+    SavedSearchCreate,
+    SavedSearchListResponse,
+    SavedSearchResponse,
 )
 
 router = APIRouter()
@@ -180,6 +184,103 @@ async def get_job_sources(
             for row in rows
         ]
     )
+
+
+@router.post(
+    "/saved-searches",
+    response_model=SavedSearchResponse,
+    status_code=201,
+    summary="Save a search filter set",
+)
+async def create_saved_search(
+    body: SavedSearchCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> SavedSearchResponse:
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="name must not be empty")
+    if not body.filters:
+        raise HTTPException(status_code=400, detail="filters must not be empty")
+
+    try:
+        user_uuid = uuid.UUID(current_user["sub"])
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid user id in token")
+
+    try:
+        record = SavedSearch(
+            user_id=user_uuid,
+            name=body.name.strip(),
+            filters=body.filters,
+            alert_email=body.alert_email,
+        )
+        db.add(record)
+        await db.flush()
+        await db.refresh(record)
+    except SQLAlchemyError:
+        raise HTTPException(status_code=500, detail="Database query failed")
+
+    return SavedSearchResponse.model_validate(record)
+
+
+@router.get(
+    "/saved-searches",
+    response_model=SavedSearchListResponse,
+    summary="List saved searches for current user",
+)
+async def list_saved_searches(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> SavedSearchListResponse:
+    try:
+        user_uuid = uuid.UUID(current_user["sub"])
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid user id in token")
+
+    try:
+        stmt = (
+            select(SavedSearch)
+            .where(SavedSearch.user_id == user_uuid)
+            .order_by(SavedSearch.created_at.desc())
+        )
+        rows = (await db.execute(stmt)).scalars().all()
+    except SQLAlchemyError:
+        raise HTTPException(status_code=500, detail="Database query failed")
+
+    return SavedSearchListResponse(
+        total=len(rows),
+        results=[SavedSearchResponse.model_validate(r) for r in rows],
+    )
+
+
+@router.post("/hidden", status_code=204, summary="Hide a job listing for the current user")
+async def hide_job(
+    body: HideJobRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> Response:
+    try:
+        user_uuid = uuid.UUID(current_user["sub"])
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid user id in token")
+
+    try:
+        listing = await db.get(Listing, body.job_id)
+        if listing is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        record = HiddenJob(user_id=user_uuid, job_id=body.job_id)
+        db.add(record)
+        await db.flush()
+    except HTTPException:
+        raise
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Job already hidden")
+    except SQLAlchemyError:
+        raise HTTPException(status_code=500, detail="Database query failed")
+
+    return Response(status_code=204)
 
 
 @router.get("/{job_id}", response_model=JobListingDetail, summary="Get job listing detail")
