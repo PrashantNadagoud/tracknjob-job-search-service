@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -8,16 +9,44 @@ from sqlalchemy.ext.asyncio import (
 
 from app.config import get_settings
 
-settings = get_settings()
 
-_database_url = settings.DATABASE_URL
-if _database_url.startswith("postgresql://"):
-    _database_url = _database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-elif not _database_url.startswith("postgresql+asyncpg://"):
-    _database_url = f"postgresql+asyncpg://{_database_url.split('://', 1)[-1]}"
+def _build_asyncpg_url(raw_url: str) -> tuple[str, dict]:
+    """Convert a standard postgresql:// URL to asyncpg-compatible form.
+
+    asyncpg does not accept 'sslmode' as a query param; it uses ssl= in
+    connect_args instead. Strip sslmode and map it to the right ssl value.
+    """
+    url = raw_url
+    for prefix, replacement in [
+        ("postgresql://", "postgresql+asyncpg://"),
+        ("postgres://", "postgresql+asyncpg://"),
+    ]:
+        if url.startswith(prefix):
+            url = replacement + url[len(prefix):]
+            break
+
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    sslmode = params.pop("sslmode", [None])[0]
+
+    new_query = urlencode({k: v[0] for k, v in params.items()})
+    clean_url = urlunparse(parsed._replace(query=new_query))
+
+    connect_args: dict = {}
+    if sslmode and sslmode not in ("disable", "allow"):
+        connect_args["ssl"] = True
+    else:
+        connect_args["ssl"] = False
+
+    return clean_url, connect_args
+
+
+settings = get_settings()
+_async_url, _connect_args = _build_asyncpg_url(settings.DATABASE_URL)
 
 engine = create_async_engine(
-    _database_url,
+    _async_url,
+    connect_args=_connect_args,
     pool_size=10,
     max_overflow=20,
     pool_pre_ping=True,
