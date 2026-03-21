@@ -8,3 +8,7 @@ python-dotenv
 pydantic-settings
 celery[redis]>=5
 redis
+httpx>=0.27
+openai>=1.0
+playwright>=1.40
+beautifulsoup4>=4.12

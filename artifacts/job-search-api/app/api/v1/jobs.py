@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
+from app.config import get_settings
 from app.db import get_db
 from app.models import HiddenJob, Listing, SavedSearch
 from app.schemas.jobs import (
@@ -281,6 +282,23 @@ async def hide_job(
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return Response(status_code=204)
+
+
+@router.post(
+    "/crawl/trigger",
+    summary="Trigger a full crawl — admin only",
+)
+async def trigger_crawl(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    settings = get_settings()
+    if not settings.ADMIN_USER_ID or current_user["sub"] != settings.ADMIN_USER_ID:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from app.crawler.tasks import crawl_all_companies  # lazy — avoids Celery init at startup
+
+    result = crawl_all_companies.delay()
+    return {"status": "crawl started", "task_id": result.id}
 
 
 @router.get("/{job_id}", response_model=JobListingDetail, summary="Get job listing detail")
