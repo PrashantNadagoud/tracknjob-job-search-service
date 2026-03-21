@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -10,7 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_current_user
 from app.db import get_db
 from app.models import HiddenJob, Listing
-from app.schemas.jobs import JobListingItem, JobSearchResponse
+from app.schemas.jobs import (
+    JobListingDetail,
+    JobListingItem,
+    JobSearchResponse,
+    JobSourceItem,
+    JobSourcesResponse,
+)
 
 router = APIRouter()
 
@@ -133,3 +140,60 @@ async def _execute_search(
         limit=limit,
         results=[JobListingItem.model_validate(row) for row in rows],
     )
+
+
+def _slugify(label: str) -> str:
+    """Lowercase, collapse non-alphanumeric runs to hyphens, strip edge hyphens."""
+    slug = re.sub(r"[^a-z0-9]+", "-", label.strip().lower())
+    return slug.strip("-")
+
+
+@router.get("/sources", response_model=JobSourcesResponse, summary="List crawled job sources")
+async def get_job_sources(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> JobSourcesResponse:
+    try:
+        stmt = (
+            select(
+                Listing.source_label,
+                func.count(Listing.id).label("job_count"),
+                func.max(Listing.crawled_at).label("last_crawled"),
+            )
+            .where(Listing.is_active == True)  # noqa: E712
+            .where(Listing.source_label.is_not(None))
+            .group_by(Listing.source_label)
+            .order_by(Listing.source_label)
+        )
+        rows = (await db.execute(stmt)).all()
+    except SQLAlchemyError:
+        raise HTTPException(status_code=500, detail="Database query failed")
+
+    return JobSourcesResponse(
+        sources=[
+            JobSourceItem(
+                id=_slugify(row.source_label),
+                label=row.source_label,
+                job_count=row.job_count,
+                last_crawled=row.last_crawled,
+            )
+            for row in rows
+        ]
+    )
+
+
+@router.get("/{job_id}", response_model=JobListingDetail, summary="Get job listing detail")
+async def get_job(
+    job_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> JobListingDetail:
+    try:
+        row = await db.get(Listing, job_id)
+    except SQLAlchemyError:
+        raise HTTPException(status_code=500, detail="Database query failed")
+
+    if row is None or not row.is_active:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return JobListingDetail.model_validate(row)
