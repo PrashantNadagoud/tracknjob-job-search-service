@@ -1,0 +1,10 @@
+fastapi>=0.104
+uvicorn[standard]
+sqlalchemy[asyncio]>=2.0
+asyncpg
+alembic
+python-jose[cryptography]
+python-dotenv
+pydantic-settings
+celery[redis]>=5
+redis

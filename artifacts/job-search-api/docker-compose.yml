@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://jobsearch:jobsearch@db:5432/jobsearch
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      TNJ_JWT_PUBLIC_KEY: ${TNJ_JWT_PUBLIC_KEY}
+      TNJ_FRONTEND_URL: ${TNJ_FRONTEND_URL}
+      PORT: 8000
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - .:/app
+
+  db:
+    image: postgres:14
+    environment:
+      POSTGRES_USER: jobsearch
+      POSTGRES_PASSWORD: jobsearch
+      POSTGRES_DB: jobsearch
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobsearch -d jobsearch"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+
+volumes:
+  pgdata:
