@@ -130,8 +130,17 @@ async def _async_crawl_all() -> None:
             jobs = await crawler.fetch_jobs()
             logger.info("%s: fetched %d jobs", crawler.source_label, len(jobs))
             new_ids = await _upsert_jobs(jobs)
+            queued = 0
             for job_id in new_ids:
-                generate_job_summary.delay(job_id)
+                try:
+                    generate_job_summary.delay(job_id)
+                    queued += 1
+                except Exception:
+                    logger.warning(
+                        "Could not queue summarization for %s (broker unavailable?); "
+                        "job is in DB, summary will remain null",
+                        job_id,
+                    )
             logger.info(
                 "%s: %d new jobs queued for summarization",
                 crawler.source_label,
