@@ -67,12 +67,7 @@ async def validation_exception_handler(
 ) -> JSONResponse:
     return JSONResponse(
         status_code=422,
-        content=_error_body(
-            "ValidationError",
-            "Request validation failed",
-            422,
-            details=exc.errors(),
-        ),
+        content=_error_body("ValidationError", "Request validation failed", 422),
     )
 
 

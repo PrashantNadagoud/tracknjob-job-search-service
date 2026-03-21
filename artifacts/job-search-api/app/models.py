@@ -1,9 +1,9 @@
 import uuid
 
+import sqlalchemy as sa
 from sqlalchemy import (
     Boolean,
     Index,
-    String,
     Text,
     func,
 )
@@ -25,19 +25,13 @@ class Listing(Base):
     __table_args__ = (
         Index(
             "idx_jobs_fts",
-            func.to_tsvector(
-                "english",
-                func.concat_ws(
-                    " ",
-                    func.coalesce(func.cast(func.col("title"), Text), ""),
-                    func.coalesce(func.cast(func.col("company"), Text), ""),
-                    func.coalesce(func.cast(func.col("location"), Text), ""),
-                ),
+            sa.text(
+                "to_tsvector('english', title || ' ' || company || ' ' || COALESCE(location,''))"
             ),
             postgresql_using="gin",
         ),
         Index("idx_jobs_remote", "remote"),
-        Index("idx_jobs_posted_at", "posted_at", postgresql_ops={"posted_at": "DESC NULLS LAST"}),
+        Index("idx_jobs_posted_at", sa.text("posted_at DESC")),
         Index("idx_jobs_company", "company"),
         {"schema": "jobs"},
     )

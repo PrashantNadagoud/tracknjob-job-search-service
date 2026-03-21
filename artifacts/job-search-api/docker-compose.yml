@@ -4,15 +4,15 @@ services:
   api:
     build: .
     ports:
-      - "8000:8000"
+      - "${PORT:-8000}:${PORT:-8000}"
     environment:
-      DATABASE_URL: postgresql://jobsearch:jobsearch@db:5432/jobsearch
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       TNJ_JWT_PUBLIC_KEY: ${TNJ_JWT_PUBLIC_KEY}
       TNJ_FRONTEND_URL: ${TNJ_FRONTEND_URL}
-      PORT: 8000
+      PORT: ${PORT:-8000}
     depends_on:
       db:
         condition: service_healthy
@@ -24,15 +24,15 @@ services:
   db:
     image: postgres:14
     environment:
-      POSTGRES_USER: jobsearch
-      POSTGRES_PASSWORD: jobsearch
-      POSTGRES_DB: jobsearch
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U jobsearch -d jobsearch"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
