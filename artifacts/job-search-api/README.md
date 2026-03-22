@@ -3,8 +3,8 @@
 TrackNJob is a standalone FastAPI microservice that aggregates job listings from
 company career pages (Cloudflare, Notion, Linear, Vercel, Stripe), stores them in
 PostgreSQL, and enriches them with AI-generated summaries via OpenAI. It exposes a
-REST API for searching, filtering, and saving job searches, secured with RS256 JWT
-authentication. Background crawling is handled by Celery workers scheduled every
+REST API for searching, filtering, and saving job searches, secured with HS256 JWT
+authentication (shared secret with TrackNJob Core). Background crawling is handled by Celery workers scheduled every
 6 hours via Celery Beat.
 
 ---
@@ -20,13 +20,12 @@ authentication. Background crawling is handled by Celery workers scheduled every
    cp .env.example .env
    ```
 
-3. Generate an RS256 keypair for JWT authentication:
+3. Set the shared JWT secret in your `.env`:
    ```
-   openssl genrsa -out private.pem 2048
-   openssl rsa -in private.pem -pubout -out public.pem
+   TNJ_SECRET_KEY=<copy the SECRET_KEY value from your TrackNJob Core .env>
    ```
-   Copy the contents of `public.pem` into `TNJ_JWT_PUBLIC_KEY` in your `.env`
-   (replace newlines with `\n`).
+   Both services must use the exact same value so tokens issued by Core are
+   accepted here.
 
 4. Start all services:
    ```
@@ -50,7 +49,7 @@ API documentation (Swagger UI) is at `http://localhost:8000/docs`.
 |---|---|---|
 | `DATABASE_URL` | Yes | PostgreSQL connection string (`postgresql+asyncpg://...`) |
 | `REDIS_URL` | Yes | Redis URL used for general cache/broker (`redis://...`) |
-| `TNJ_JWT_PUBLIC_KEY` | Yes | RS256 public key (PEM format) for JWT verification |
+| `TNJ_SECRET_KEY` | Yes | HS256 shared secret — must match `SECRET_KEY` in TrackNJob Core |
 | `TNJ_FRONTEND_URL` | Yes | Allowed CORS origin (e.g. `http://localhost:3000`) |
 | `OPENAI_API_KEY` | No | OpenAI API key for AI summary generation; leave empty to skip |
 | `ADMIN_USER_ID` | No | JWT `sub` value granted access to `POST /crawl/trigger` |

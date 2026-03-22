@@ -3,7 +3,7 @@ from jose import JWTError, jwt
 
 from app.config import get_settings
 
-ALGORITHM = "RS256"
+ALGORITHM = "HS256"
 
 
 async def get_current_user(request: Request) -> dict:
@@ -14,21 +14,23 @@ async def get_current_user(request: Request) -> dict:
     token = auth_header[len("Bearer "):]
     settings = get_settings()
 
+    if not settings.TNJ_SECRET_KEY:
+        raise _UnauthorizedError("Server misconfiguration: secret key not set")
+
     try:
         payload = jwt.decode(
             token,
-            settings.TNJ_JWT_PUBLIC_KEY,
+            settings.TNJ_SECRET_KEY,
             algorithms=[ALGORITHM],
         )
     except JWTError:
         raise _UnauthorizedError("Invalid or expired token")
 
     sub = payload.get("sub")
-    email = payload.get("email")
-    if not sub or not email:
-        raise _UnauthorizedError("Token missing required claims")
+    if not sub:
+        raise _UnauthorizedError("Token missing subject claim")
 
-    return {"sub": str(sub), "email": str(email)}
+    return {"sub": str(sub), "email": str(payload.get("email", ""))}
 
 
 class _UnauthorizedError(Exception):
