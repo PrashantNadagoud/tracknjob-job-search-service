@@ -7,27 +7,13 @@ import uuid
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from typing import Any
 
-from celery import Celery
 from sqlalchemy import pool, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.celery_app import celery_app
 from app.models import Listing
 
 logger = logging.getLogger(__name__)
-
-celery_app = Celery(
-    "tracknJob",
-    broker=os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0"),
-    backend=os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/0"),
-)
-
-celery_app.conf.update(
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-    timezone="UTC",
-    enable_utc=True,
-)
 
 
 def _make_session() -> async_sessionmaker[AsyncSession]:
@@ -184,14 +170,14 @@ async def _async_summarize(job_id: str) -> None:
 # Celery tasks
 # ---------------------------------------------------------------------------
 
-@celery_app.task(bind=True, name="crawl_all_companies")
+@celery_app.task(bind=True, name="app.crawler.tasks.crawl_all_companies")
 def crawl_all_companies(self):  # type: ignore[override]
     """Crawl all registered company career pages and upsert into jobs.listings."""
     asyncio.run(_async_crawl_all())
     return {"status": "completed"}
 
 
-@celery_app.task(bind=True, name="generate_job_summary")
+@celery_app.task(bind=True, name="app.crawler.tasks.generate_job_summary")
 def generate_job_summary(self, job_id: str):  # type: ignore[override]
     """Generate AI summary, tags, and salary_range for a single job listing."""
     asyncio.run(_async_summarize(job_id))

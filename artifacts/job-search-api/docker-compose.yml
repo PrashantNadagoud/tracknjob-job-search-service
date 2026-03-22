@@ -1,21 +1,50 @@
 version: "3.9"
 
+x-app-env: &app-env
+  DATABASE_URL: ${DATABASE_URL}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+  TNJ_JWT_PUBLIC_KEY: ${TNJ_JWT_PUBLIC_KEY}
+  TNJ_FRONTEND_URL: ${TNJ_FRONTEND_URL}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  ADMIN_USER_ID: ${ADMIN_USER_ID:-}
+  PORT: ${PORT:-8000}
+
 services:
   api:
     build: .
     ports:
       - "${PORT:-8000}:${PORT:-8000}"
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
-      TNJ_JWT_PUBLIC_KEY: ${TNJ_JWT_PUBLIC_KEY}
-      TNJ_FRONTEND_URL: ${TNJ_FRONTEND_URL}
-      PORT: ${PORT:-8000}
+      <<: *app-env
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - .:/app
+
+  celery-worker:
+    build: .
+    command: celery -A app.celery_app worker -Q jobs_queue --loglevel=info
+    environment:
+      <<: *app-env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - .:/app
+
+  celery-beat:
+    build: .
+    command: celery -A app.celery_app beat --loglevel=info
+    environment:
+      <<: *app-env
+    depends_on:
       redis:
         condition: service_started
     volumes:
