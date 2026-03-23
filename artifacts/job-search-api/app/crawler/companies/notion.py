@@ -14,6 +14,7 @@ _ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/notion"
 class NotionCrawler(BaseCrawler):
     source_label = "Notion Careers"
     careers_url = "https://www.notion.so/careers"
+    country = "US"
 
     async def fetch_jobs(self) -> list[dict[str, Any]]:
         data: dict[str, Any] = await self._get_json(_ASHBY_API)

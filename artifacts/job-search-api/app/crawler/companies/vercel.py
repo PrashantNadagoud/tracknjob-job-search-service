@@ -14,6 +14,7 @@ _GREENHOUSE_API = "https://boards-api.greenhouse.io/v1/boards/vercel/jobs"
 class VercelCrawler(BaseCrawler):
     source_label = "Vercel Careers"
     careers_url = "https://vercel.com/careers"
+    country = "US"
 
     async def fetch_jobs(self) -> list[dict[str, Any]]:
         data: dict[str, Any] = await self._get_json(_GREENHOUSE_API)

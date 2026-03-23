@@ -19,6 +19,7 @@ class BaseCrawler(ABC):
 
     source_label: str
     careers_url: str
+    country: str = "US"  # override to "IN" in India crawlers
 
     _HEADERS = {
         "User-Agent": (

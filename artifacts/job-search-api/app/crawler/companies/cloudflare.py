@@ -14,6 +14,7 @@ _GREENHOUSE_API = "https://boards-api.greenhouse.io/v1/boards/cloudflare/jobs"
 class CloudflareCrawler(BaseCrawler):
     source_label = "Cloudflare Careers"
     careers_url = "https://www.cloudflare.com/careers/jobs/"
+    country = "US"
 
     async def fetch_jobs(self) -> list[dict[str, Any]]:
         data: dict[str, Any] = await self._get_json(_GREENHOUSE_API)

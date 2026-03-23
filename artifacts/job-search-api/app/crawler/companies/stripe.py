@@ -22,6 +22,7 @@ _BASE_URL = "https://stripe.com"
 class StripeCrawler(BaseCrawler):
     source_label = "Stripe Careers"
     careers_url = "https://stripe.com/jobs"
+    country = "US"
 
     async def fetch_jobs(self) -> list[dict[str, Any]]:
         try:

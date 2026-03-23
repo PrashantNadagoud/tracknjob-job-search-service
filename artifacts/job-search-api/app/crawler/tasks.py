@@ -49,6 +49,7 @@ def _sanitize_job(job: dict[str, Any]) -> dict[str, Any]:
         "source_url": job.get("source_url", ""),
         "source_label": job.get("source_label") or None,
         "posted_at": job.get("posted_at"),
+        "country": job.get("country", "US"),
     }
 
 
@@ -94,21 +95,46 @@ async def _upsert_jobs(jobs: list[dict[str, Any]]) -> list[str]:
     return new_ids
 
 
-async def _async_crawl_all() -> None:
-    """Run all crawlers, upsert results, queue summary generation."""
+async def _async_crawl_all(country: str = "ALL") -> None:
+    """Run crawlers filtered by country, upsert results, queue summary generation.
+
+    country: "US" → US crawlers only, "IN" → India crawlers only, "ALL" → all.
+    """
     from app.crawler.companies.cloudflare import CloudflareCrawler
     from app.crawler.companies.linear import LinearCrawler
     from app.crawler.companies.notion import NotionCrawler
     from app.crawler.companies.stripe import StripeCrawler
     from app.crawler.companies.vercel import VercelCrawler
+    from app.crawler.companies.india.amazon import AmazonIndiaCrawler
+    from app.crawler.companies.india.flipkart import FlipkartCrawler
+    from app.crawler.companies.india.google import GoogleIndiaCrawler
+    from app.crawler.companies.india.microsoft import MicrosoftIndiaCrawler
+    from app.crawler.companies.india.razorpay import RazorpayCrawler
 
-    crawlers = [
+    all_crawlers = [
         StripeCrawler(),
         NotionCrawler(),
         LinearCrawler(),
         VercelCrawler(),
         CloudflareCrawler(),
+        GoogleIndiaCrawler(),
+        MicrosoftIndiaCrawler(),
+        AmazonIndiaCrawler(),
+        FlipkartCrawler(),
+        RazorpayCrawler(),
     ]
+
+    country_upper = country.upper()
+    if country_upper == "ALL":
+        crawlers = all_crawlers
+    else:
+        crawlers = [c for c in all_crawlers if c.country == country_upper]
+
+    logger.info(
+        "crawl_all_companies: country=%s → running %d crawler(s)",
+        country_upper,
+        len(crawlers),
+    )
 
     for crawler in crawlers:
         try:
@@ -171,10 +197,13 @@ async def _async_summarize(job_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 @celery_app.task(bind=True, name="app.crawler.tasks.crawl_all_companies")
-def crawl_all_companies(self):  # type: ignore[override]
-    """Crawl all registered company career pages and upsert into jobs.listings."""
-    asyncio.run(_async_crawl_all())
-    return {"status": "completed"}
+def crawl_all_companies(self, country: str = "ALL"):  # type: ignore[override]
+    """Crawl company career pages and upsert into jobs.listings.
+
+    country: "ALL" (default) → all crawlers; "US" → US only; "IN" → India only.
+    """
+    asyncio.run(_async_crawl_all(country=country))
+    return {"status": "completed", "country": country}
 
 
 @celery_app.task(bind=True, name="app.crawler.tasks.generate_job_summary")

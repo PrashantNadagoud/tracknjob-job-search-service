@@ -14,6 +14,7 @@ _ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/linear"
 class LinearCrawler(BaseCrawler):
     source_label = "Linear Careers"
     careers_url = "https://linear.app/careers"
+    country = "US"
 
     async def fetch_jobs(self) -> list[dict[str, Any]]:
         data: dict[str, Any] = await self._get_json(_ASHBY_API)

@@ -57,6 +57,9 @@ class Listing(Base):
     tags: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     salary_range: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, server_default="true", nullable=False)
+    country: Mapped[str] = mapped_column(
+        sa.String(2), server_default="US", nullable=False
+    )
 
 
 class SavedSearch(Base):

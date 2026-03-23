@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +24,10 @@ from app.schemas.jobs import (
     SavedSearchListResponse,
     SavedSearchResponse,
 )
+
+
+class CrawlTriggerRequest(BaseModel):
+    country: str = "ALL"  # "US", "IN", or "ALL"
 
 router = APIRouter()
 
@@ -51,6 +56,7 @@ async def search_jobs(
     source: str | None = Query(default=None, description="Filter by source_label"),
     company: str | None = Query(default=None, description="Filter by company name (partial match)"),
     posted: PostedFilter = Query(default=PostedFilter.any, description="Filter by posted_at recency"),
+    country: str = Query(default="US", description="Country filter: US, IN, or ALL"),
     page: int = Query(default=1, ge=1, description="Page number"),
     limit: int = Query(default=20, ge=1, le=50, description="Results per page (max 50)"),
     db: AsyncSession = Depends(get_db),
@@ -66,6 +72,7 @@ async def search_jobs(
             source=source,
             company=company,
             posted=posted,
+            country=country,
             page=page,
             limit=limit,
         )
@@ -82,6 +89,7 @@ async def _execute_search(
     source: str | None,
     company: str | None,
     posted: PostedFilter,
+    country: str,
     page: int,
     limit: int,
 ) -> JobSearchResponse:
@@ -119,6 +127,11 @@ async def _execute_search(
     # Company partial match
     if company:
         stmt = stmt.where(Listing.company.ilike(f"%{company}%"))
+
+    # Country filter: "US" or "IN" → exact match; "ALL" → no filter
+    country_upper = country.upper()
+    if country_upper in ("US", "IN"):
+        stmt = stmt.where(Listing.country == country_upper)
 
     # posted_at recency filter
     if posted != PostedFilter.any:
@@ -286,18 +299,23 @@ async def hide_job(
 
 @router.post(
     "/crawl/trigger",
-    summary="Trigger a full crawl — admin only",
+    summary="Trigger a crawl — admin only",
 )
 async def trigger_crawl(
+    body: CrawlTriggerRequest = CrawlTriggerRequest(),
     current_user: dict = Depends(get_current_user),
 ) -> dict:
     settings = get_settings()
     if not settings.ADMIN_USER_ID or current_user["sub"] != settings.ADMIN_USER_ID:
         raise HTTPException(status_code=403, detail="Admin access required")
 
+    country = body.country.upper()
+    if country not in ("US", "IN", "ALL"):
+        raise HTTPException(status_code=422, detail="country must be 'US', 'IN', or 'ALL'")
+
     from app.crawler.tasks import crawl_all_companies  # lazy — avoids Celery init at startup
 
-    result = crawl_all_companies.delay()
+    result = crawl_all_companies.delay(country)
     return {"status": "crawl started", "task_id": result.id}
 
 
