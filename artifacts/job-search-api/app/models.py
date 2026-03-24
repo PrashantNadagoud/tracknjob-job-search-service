@@ -33,6 +33,13 @@ class Listing(Base):
         Index("idx_jobs_remote", "remote"),
         Index("idx_jobs_posted_at", sa.text("posted_at DESC")),
         Index("idx_jobs_company", "company"),
+        Index("idx_jobs_last_seen", "last_seen_at"),
+        Index(
+            "idx_jobs_title_trgm",
+            "title",
+            postgresql_using="gin",
+            postgresql_ops={"title": "gin_trgm_ops"},
+        ),
         {"schema": "jobs"},
     )
 
@@ -59,6 +66,9 @@ class Listing(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, server_default="true", nullable=False)
     country: Mapped[str] = mapped_column(
         sa.String(2), server_default="US", nullable=False
+    )
+    last_seen_at: Mapped[TIMESTAMP | None] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=True
     )
 
 

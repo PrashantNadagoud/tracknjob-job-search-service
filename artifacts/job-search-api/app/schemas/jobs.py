@@ -19,6 +19,7 @@ class JobListingItem(BaseModel):
     tags: list[str] | None = None
     salary_range: str | None = None
     country: str = "US"
+    last_seen_at: datetime | None = None
 
 
 class JobSearchResponse(BaseModel):

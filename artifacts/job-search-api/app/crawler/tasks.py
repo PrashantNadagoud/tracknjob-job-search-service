@@ -4,10 +4,11 @@ import asyncio
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from typing import Any
 
-from sqlalchemy import pool, select
+from sqlalchemy import pool, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.celery_app import celery_app
@@ -57,10 +58,48 @@ def _sanitize_job(job: dict[str, Any]) -> dict[str, Any]:
 # Async helpers
 # ---------------------------------------------------------------------------
 
+async def _check_duplicate(
+    session: AsyncSession,
+    title: str,
+    company: str,
+    country: str,
+) -> uuid.UUID | None:
+    """Return the UUID of an existing active job that looks like a duplicate.
+
+    Uses pg_trgm similarity (threshold 0.85) against jobs posted in the last
+    30 days from the same company and country.
+    """
+    row = (
+        await session.execute(
+            text("""
+                SELECT id FROM jobs.listings
+                WHERE company  = :company
+                  AND similarity(title, :title) > 0.85
+                  AND posted_at > NOW() - INTERVAL '30 days'
+                  AND country  = :country
+                  AND is_active = TRUE
+                LIMIT 1
+            """),
+            {"company": company, "title": title, "country": country},
+        )
+    ).fetchone()
+    return row[0] if row else None
+
+
 async def _upsert_jobs(jobs: list[dict[str, Any]]) -> list[str]:
-    """Upsert job listings. Returns list of newly inserted job UUIDs."""
+    """Upsert job listings with ghost-job + duplicate detection.
+
+    Logic per job:
+    - EXISTS by source_url + is_active=TRUE  → bump last_seen_at
+    - EXISTS by source_url + is_active=FALSE → reactivate + bump last_seen_at
+    - NEW, duplicate found via pg_trgm       → bump last_seen_at on match, skip insert
+    - NEW, no duplicate                      → INSERT with last_seen_at=NOW()
+
+    Returns list of newly inserted job UUIDs (for summarization queue).
+    """
     Session = _make_session()
     new_ids: list[str] = []
+    now = datetime.now(timezone.utc)
 
     async with Session() as session:
         for job in jobs:
@@ -68,27 +107,52 @@ async def _upsert_jobs(jobs: list[dict[str, Any]]) -> list[str]:
             if not source_url:
                 continue
 
-            stmt = select(Listing).where(Listing.source_url == source_url)
-            existing = (await session.execute(stmt)).scalar_one_or_none()
+            existing = (
+                await session.execute(
+                    select(Listing).where(Listing.source_url == source_url)
+                )
+            ).scalar_one_or_none()
 
-            if existing is None:
-                listing = Listing(**_sanitize_job(job))
-                session.add(listing)
-                await session.flush()
-                new_ids.append(str(listing.id))
-                logger.info(
-                    "Inserted new job: %s @ %s",
-                    job.get("title"),
-                    job.get("company"),
-                )
-            elif not existing.is_active:
-                existing.is_active = True
-                logger.info(
-                    "Reactivated job: %s @ %s",
-                    existing.title,
-                    existing.company,
-                )
-            # else: already active — skip
+            if existing is not None:
+                # Job already known by this exact URL
+                existing.last_seen_at = now
+                if not existing.is_active:
+                    existing.is_active = True
+                    logger.info(
+                        "Reactivated job: %s @ %s", existing.title, existing.company
+                    )
+                # (active jobs: last_seen_at bumped silently)
+
+            else:
+                # Potentially new job — run duplicate check before inserting
+                sanitized = _sanitize_job(job)
+                title   = sanitized["title"]
+                company = sanitized["company"]
+                country = sanitized["country"]
+
+                dup_id = await _check_duplicate(session, title, company, country)
+
+                if dup_id is not None:
+                    logger.info(
+                        "Duplicate detected: %r at %s — skipping insert",
+                        title,
+                        company,
+                    )
+                    await session.execute(
+                        text(
+                            "UPDATE jobs.listings "
+                            "SET last_seen_at = NOW() "
+                            "WHERE id = :id"
+                        ),
+                        {"id": str(dup_id)},
+                    )
+                else:
+                    # Truly new job — insert
+                    listing = Listing(**sanitized, last_seen_at=now)
+                    session.add(listing)
+                    await session.flush()
+                    new_ids.append(str(listing.id))
+                    logger.info("Inserted new job: %s @ %s", title, company)
 
         await session.commit()
 
@@ -192,6 +256,28 @@ async def _async_summarize(job_id: str) -> None:
         logger.info("Updated AI summary for job %s (%s)", job_id, listing.title)
 
 
+async def _async_deactivate_stale() -> int:
+    """Set is_active=FALSE for all jobs not seen in the last 12 hours.
+
+    Returns the number of rows deactivated.
+    """
+    Session = _make_session()
+
+    async with Session() as session:
+        result = await session.execute(
+            text("""
+                UPDATE jobs.listings
+                SET    is_active = FALSE
+                WHERE  last_seen_at < NOW() - INTERVAL '12 hours'
+                  AND  is_active = TRUE
+            """)
+        )
+        await session.commit()
+        count: int = result.rowcount
+        logger.info("deactivate_stale_jobs: deactivated %d job(s)", count)
+        return count
+
+
 # ---------------------------------------------------------------------------
 # Celery tasks
 # ---------------------------------------------------------------------------
@@ -211,3 +297,10 @@ def generate_job_summary(self, job_id: str):  # type: ignore[override]
     """Generate AI summary, tags, and salary_range for a single job listing."""
     asyncio.run(_async_summarize(job_id))
     return {"status": "completed", "job_id": job_id}
+
+
+@celery_app.task(name="app.crawler.tasks.deactivate_stale_jobs")
+def deactivate_stale_jobs() -> dict[str, int]:  # type: ignore[override]
+    """Deactivate job listings not seen by any crawler in the last 12 hours."""
+    count = asyncio.run(_async_deactivate_stale())
+    return {"deactivated_count": count}

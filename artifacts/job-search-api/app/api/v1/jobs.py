@@ -319,6 +319,23 @@ async def trigger_crawl(
     return {"status": "crawl started", "task_id": result.id}
 
 
+@router.post(
+    "/maintenance/deactivate-stale",
+    summary="Manually trigger stale job deactivation — admin only",
+)
+async def trigger_deactivate_stale(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    settings = get_settings()
+    if not settings.ADMIN_USER_ID or current_user["sub"] != settings.ADMIN_USER_ID:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from app.crawler.tasks import deactivate_stale_jobs  # lazy import
+
+    result = deactivate_stale_jobs.delay()
+    return {"status": "deactivation started", "task_id": result.id}
+
+
 @router.get("/{job_id}", response_model=JobListingDetail, summary="Get job listing detail")
 async def get_job(
     job_id: uuid.UUID,
