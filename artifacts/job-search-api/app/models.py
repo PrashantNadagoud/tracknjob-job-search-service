@@ -85,6 +85,11 @@ class SavedSearch(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     filters: Mapped[dict] = mapped_column(JSONB, nullable=False)
     alert_email: Mapped[bool] = mapped_column(Boolean, server_default="false", nullable=False)
+    user_email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_alerted_at: Mapped[TIMESTAMP | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    last_alerted_job_ids: Mapped[list | None] = mapped_column(JSONB, server_default="'[]'", nullable=True)
     created_at: Mapped[TIMESTAMP | None] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=True
     )

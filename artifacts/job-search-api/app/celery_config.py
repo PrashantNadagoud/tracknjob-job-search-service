@@ -9,5 +9,9 @@ beat_schedule = {
         "task": "app.crawler.tasks.deactivate_stale_jobs",
         "schedule": crontab(minute=0, hour="*/12"),
     },
+    "send-job-alerts-every-30-minutes": {
+        "task": "app.crawler.tasks.send_job_alerts",
+        "schedule": crontab(minute="*/30"),
+    },
 }
 timezone = "UTC"

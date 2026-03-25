@@ -227,6 +227,7 @@ async def create_saved_search(
             name=body.name.strip(),
             filters=body.filters,
             alert_email=body.alert_email,
+            user_email=body.user_email or None,
         )
         db.add(record)
         await db.flush()
@@ -317,6 +318,23 @@ async def trigger_crawl(
 
     result = crawl_all_companies.delay(country)
     return {"status": "crawl started", "task_id": result.id}
+
+
+@router.post(
+    "/maintenance/trigger-alerts",
+    summary="Manually trigger job alert emails — admin only",
+)
+async def trigger_alerts(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    settings = get_settings()
+    if not settings.ADMIN_USER_ID or current_user["sub"] != settings.ADMIN_USER_ID:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from app.crawler.tasks import send_job_alerts  # lazy import
+
+    result = send_job_alerts.delay()
+    return {"status": "alerts triggered", "task_id": result.id}
 
 
 @router.post(

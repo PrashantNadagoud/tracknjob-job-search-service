@@ -62,6 +62,7 @@ class SavedSearchCreate(BaseModel):
     name: str
     filters: dict
     alert_email: bool = False
+    user_email: str | None = None
 
 
 class SavedSearchResponse(BaseModel):
@@ -71,6 +72,8 @@ class SavedSearchResponse(BaseModel):
     name: str
     filters: dict
     alert_email: bool
+    user_email: str | None = None
+    last_alerted_at: datetime | None = None
     created_at: datetime | None = None
 
 

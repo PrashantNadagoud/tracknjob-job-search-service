@@ -1,6 +1,7 @@
 """Celery task definitions for the TrackNJob crawler."""
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -12,7 +13,7 @@ from sqlalchemy import pool, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.celery_app import celery_app
-from app.models import Listing
+from app.models import Listing, SavedSearch
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +279,164 @@ async def _async_deactivate_stale() -> int:
         return count
 
 
+async def _async_send_job_alerts() -> dict[str, int]:
+    """Process all saved searches with alert_email=TRUE.
+
+    For each search:
+    - Re-runs its stored filters against jobs.listings
+    - Computes new_job_ids = current_ids − last_alerted_job_ids
+    - If new jobs exist, sends an email via Resend and records the alert
+    - Skips searches with no user_email configured
+
+    Returns {"searches_processed": N, "emails_sent": M}
+    """
+    from datetime import timedelta
+
+    from app.email import send_job_alert_email
+
+    Session = _make_session()
+    searches_processed = 0
+    emails_sent = 0
+
+    _posted_cutoffs: dict[str, timedelta] = {
+        "24h": timedelta(days=1),
+        "3d":  timedelta(days=3),
+        "7d":  timedelta(days=7),
+        "30d": timedelta(days=30),
+    }
+
+    async with Session() as session:
+        # Fetch every saved search that has alert_email enabled and a stored email
+        result = await session.execute(
+            select(SavedSearch).where(
+                SavedSearch.alert_email == True,  # noqa: E712
+                SavedSearch.user_email.is_not(None),
+            )
+        )
+        searches = result.scalars().all()
+        logger.info("send_job_alerts: processing %d alert-enabled search(es)", len(searches))
+
+        for search in searches:
+            searches_processed += 1
+            filters: dict = search.filters or {}
+
+            # ── Re-run search filters ─────────────────────────────────────
+            stmt = select(Listing.id).where(Listing.is_active == True)  # noqa: E712
+
+            q = filters.get("q")
+            if q:
+                stmt = stmt.where(
+                    text(
+                        "to_tsvector('english', title || ' ' || company || ' ' || COALESCE(location,''))"
+                        " @@ plainto_tsquery('english', :fts_q)"
+                    ).bindparams(fts_q=q)
+                )
+
+            location = filters.get("location")
+            if location:
+                stmt = stmt.where(Listing.location.ilike(f"%{location}%"))
+
+            if filters.get("remote"):
+                stmt = stmt.where(Listing.remote == True)  # noqa: E712
+
+            source = filters.get("source")
+            if source:
+                stmt = stmt.where(Listing.source_label == source)
+
+            company = filters.get("company")
+            if company:
+                stmt = stmt.where(Listing.company.ilike(f"%{company}%"))
+
+            country = (filters.get("country") or "US").upper()
+            if country in ("US", "IN"):
+                stmt = stmt.where(Listing.country == country)
+
+            posted = filters.get("posted")
+            if posted and posted in _posted_cutoffs:
+                cutoff = datetime.now(timezone.utc) - _posted_cutoffs[posted]
+                stmt = stmt.where(Listing.posted_at >= cutoff)
+
+            id_rows = (await session.execute(stmt)).scalars().all()
+            current_ids: list[str] = [str(row) for row in id_rows]
+
+            # ── Diff against last alerted ─────────────────────────────────
+            last_alerted: list[str] = search.last_alerted_job_ids or []
+            last_alerted_set = set(last_alerted)
+            new_job_ids = [jid for jid in current_ids if jid not in last_alerted_set]
+
+            if not new_job_ids:
+                logger.debug(
+                    "send_job_alerts: search %s (%s) — no new jobs, skipping",
+                    search.id,
+                    search.name,
+                )
+                continue
+
+            # ── Fetch full job objects for new ids ────────────────────────
+            new_uuid_ids = []
+            for jid in new_job_ids:
+                try:
+                    new_uuid_ids.append(uuid.UUID(jid))
+                except ValueError:
+                    continue
+
+            job_rows_result = await session.execute(
+                select(Listing).where(Listing.id.in_(new_uuid_ids))
+            )
+            new_job_objects = job_rows_result.scalars().all()
+
+            new_jobs_payload = [
+                {
+                    "title": j.title,
+                    "company": j.company,
+                    "location": j.location,
+                    "source_url": j.source_url,
+                    "salary_range": j.salary_range,
+                }
+                for j in new_job_objects
+            ]
+
+            # ── Send email ────────────────────────────────────────────────
+            try:
+                send_job_alert_email(
+                    to_email=search.user_email,
+                    search_name=search.name,
+                    new_jobs=new_jobs_payload,
+                )
+                emails_sent += 1
+                logger.info(
+                    "send_job_alerts: emailed %s — %d new job(s) for search '%s'",
+                    search.user_email,
+                    len(new_jobs_payload),
+                    search.name,
+                )
+            except Exception:
+                logger.exception(
+                    "send_job_alerts: failed to send email for search %s", search.id
+                )
+                continue
+
+            # ── Update last_alerted state ─────────────────────────────────
+            await session.execute(
+                text("""
+                    UPDATE jobs.saved_searches
+                    SET last_alerted_at       = NOW(),
+                        last_alerted_job_ids  = :job_ids ::jsonb
+                    WHERE id = :search_id
+                """),
+                {"job_ids": json.dumps(current_ids), "search_id": str(search.id)},
+            )
+
+        await session.commit()
+
+    logger.info(
+        "send_job_alerts: done — %d search(es) processed, %d email(s) sent",
+        searches_processed,
+        emails_sent,
+    )
+    return {"searches_processed": searches_processed, "emails_sent": emails_sent}
+
+
 # ---------------------------------------------------------------------------
 # Celery tasks
 # ---------------------------------------------------------------------------
@@ -304,3 +463,9 @@ def deactivate_stale_jobs() -> dict[str, int]:  # type: ignore[override]
     """Deactivate job listings not seen by any crawler in the last 12 hours."""
     count = asyncio.run(_async_deactivate_stale())
     return {"deactivated_count": count}
+
+
+@celery_app.task(name="app.crawler.tasks.send_job_alerts")
+def send_job_alerts() -> dict[str, int]:  # type: ignore[override]
+    """Send job alert emails for all saved searches that have new results."""
+    return asyncio.run(_async_send_job_alerts())
