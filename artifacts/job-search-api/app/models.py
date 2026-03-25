@@ -105,3 +105,20 @@ class HiddenJob(Base):
     job_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, nullable=False
     )
+
+
+class JobPreference(Base):
+    __tablename__ = "job_preferences"
+    __table_args__ = {"schema": "jobs"}
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, nullable=False
+    )
+    desired_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    skills: Mapped[list[str] | None] = mapped_column(ARRAY(Text), server_default="{}", nullable=True)
+    preferred_location: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remote_only: Mapped[bool] = mapped_column(Boolean, server_default="false", nullable=False)
+    seniority: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[TIMESTAMP | None] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=True
+    )

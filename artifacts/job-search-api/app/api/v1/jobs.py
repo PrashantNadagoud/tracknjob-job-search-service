@@ -1,3 +1,4 @@
+import logging
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -12,11 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_current_user
 from app.config import get_settings
 from app.db import get_db
-from app.models import HiddenJob, Listing, SavedSearch
+from app.models import HiddenJob, JobPreference, Listing, SavedSearch
 from app.schemas.jobs import (
     HideJobRequest,
     JobListingDetail,
     JobListingItem,
+    JobPreferencesCreate,
+    JobPreferencesResponse,
     JobSearchResponse,
     JobSourceItem,
     JobSourcesResponse,
@@ -24,10 +27,14 @@ from app.schemas.jobs import (
     SavedSearchListResponse,
     SavedSearchResponse,
 )
+from app.scoring import compute_match_score, get_match_label
+
+logger = logging.getLogger(__name__)
 
 
 class CrawlTriggerRequest(BaseModel):
-    country: str = "ALL"  # "US", "IN", or "ALL"
+    country: str = "ALL"
+
 
 router = APIRouter()
 
@@ -38,6 +45,11 @@ class PostedFilter(str, Enum):
     d7 = "7d"
     d30 = "30d"
     any = "any"
+
+
+class SortBy(str, Enum):
+    posted_at = "posted_at"
+    match_score = "match_score"
 
 
 _POSTED_CUTOFFS: dict[str, timedelta] = {
@@ -57,6 +69,7 @@ async def search_jobs(
     company: str | None = Query(default=None, description="Filter by company name (partial match)"),
     posted: PostedFilter = Query(default=PostedFilter.any, description="Filter by posted_at recency"),
     country: str = Query(default="US", description="Country filter: US, IN, or ALL"),
+    sort_by: SortBy = Query(default=SortBy.posted_at, description="Sort results by: posted_at, match_score"),
     page: int = Query(default=1, ge=1, description="Page number"),
     limit: int = Query(default=20, ge=1, le=50, description="Results per page (max 50)"),
     db: AsyncSession = Depends(get_db),
@@ -73,6 +86,7 @@ async def search_jobs(
             company=company,
             posted=posted,
             country=country,
+            sort_by=sort_by,
             page=page,
             limit=limit,
         )
@@ -90,20 +104,19 @@ async def _execute_search(
     company: str | None,
     posted: PostedFilter,
     country: str,
+    sort_by: SortBy,
     page: int,
     limit: int,
 ) -> JobSearchResponse:
     stmt = select(Listing).where(Listing.is_active == True)  # noqa: E712
 
-    # Exclude jobs hidden by current user
     try:
         user_uuid = uuid.UUID(user_id_str)
         hidden_subq = select(HiddenJob.job_id).where(HiddenJob.user_id == user_uuid)
         stmt = stmt.where(~Listing.id.in_(hidden_subq))
     except ValueError:
-        pass
+        user_uuid = None
 
-    # Full-text search — uses the existing idx_jobs_fts GIN index
     if q:
         stmt = stmt.where(
             text(
@@ -112,37 +125,29 @@ async def _execute_search(
             ).bindparams(fts_q=q)
         )
 
-    # Location partial match
     if location:
         stmt = stmt.where(Listing.location.ilike(f"%{location}%"))
 
-    # Remote-only filter
     if remote:
         stmt = stmt.where(Listing.remote == True)  # noqa: E712
 
-    # Source label exact match
     if source:
         stmt = stmt.where(Listing.source_label == source)
 
-    # Company partial match
     if company:
         stmt = stmt.where(Listing.company.ilike(f"%{company}%"))
 
-    # Country filter: "US" or "IN" → exact match; "ALL" → no filter
     country_upper = country.upper()
     if country_upper in ("US", "IN"):
         stmt = stmt.where(Listing.country == country_upper)
 
-    # posted_at recency filter
     if posted != PostedFilter.any:
         cutoff = datetime.now(timezone.utc) - _POSTED_CUTOFFS[posted.value]
         stmt = stmt.where(Listing.posted_at >= cutoff)
 
-    # Total count via subquery (before pagination)
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total: int = (await db.scalar(count_stmt)) or 0
 
-    # Apply ordering and pagination
     offset = (page - 1) * limit
     paginated = (
         stmt.order_by(Listing.posted_at.desc().nulls_last())
@@ -152,16 +157,54 @@ async def _execute_search(
 
     rows = (await db.execute(paginated)).scalars().all()
 
+    # Fetch preferences for scoring — never let this block the response
+    prefs: dict | None = None
+    if user_uuid is not None:
+        try:
+            pref_row = await db.get(JobPreference, user_uuid)
+            if pref_row is not None:
+                prefs = {
+                    "desired_title": pref_row.desired_title,
+                    "skills": pref_row.skills or [],
+                    "preferred_location": pref_row.preferred_location,
+                    "remote_only": pref_row.remote_only,
+                    "seniority": pref_row.seniority,
+                }
+        except Exception:
+            logger.warning("Failed to fetch job preferences for scoring — defaulting to null scores")
+            prefs = None
+
+    # Build result items with optional match scores
+    results: list[JobListingItem] = []
+    for row in rows:
+        item = JobListingItem.model_validate(row)
+        if prefs is not None:
+            job_dict = {
+                "title": row.title,
+                "tags": row.tags,
+                "remote": row.remote,
+                "location": row.location,
+            }
+            score = compute_match_score(job_dict, prefs)
+            item = item.model_copy(update={
+                "match_score": score,
+                "match_label": get_match_label(score),
+            })
+        results.append(item)
+
+    # Sort by match_score DESC (in-memory, within this page)
+    if sort_by == SortBy.match_score and prefs is not None:
+        results.sort(key=lambda x: (x.match_score or 0), reverse=True)
+
     return JobSearchResponse(
         total=total,
         page=page,
         limit=limit,
-        results=[JobListingItem.model_validate(row) for row in rows],
+        results=results,
     )
 
 
 def _slugify(label: str) -> str:
-    """Lowercase, collapse non-alphanumeric runs to hyphens, strip edge hyphens."""
     slug = re.sub(r"[^a-z0-9]+", "-", label.strip().lower())
     return slug.strip("-")
 
@@ -198,6 +241,78 @@ async def get_job_sources(
             for row in rows
         ]
     )
+
+
+@router.post(
+    "/preferences",
+    response_model=JobPreferencesResponse,
+    summary="Save or update job preferences (upsert)",
+)
+async def upsert_preferences(
+    body: JobPreferencesCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> JobPreferencesResponse:
+    try:
+        user_uuid = uuid.UUID(current_user["sub"])
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid user id in token")
+
+    try:
+        await db.execute(
+            text("""
+                INSERT INTO jobs.job_preferences
+                  (user_id, desired_title, skills, preferred_location, remote_only, seniority, updated_at)
+                VALUES
+                  (:user_id, :desired_title, :skills, :preferred_location, :remote_only, :seniority, NOW())
+                ON CONFLICT (user_id) DO UPDATE SET
+                  desired_title      = EXCLUDED.desired_title,
+                  skills             = EXCLUDED.skills,
+                  preferred_location = EXCLUDED.preferred_location,
+                  remote_only        = EXCLUDED.remote_only,
+                  seniority          = EXCLUDED.seniority,
+                  updated_at         = NOW()
+            """),
+            {
+                "user_id": str(user_uuid),
+                "desired_title": body.desired_title,
+                "skills": body.skills or [],
+                "preferred_location": body.preferred_location,
+                "remote_only": body.remote_only,
+                "seniority": body.seniority,
+            },
+        )
+        await db.flush()
+        record = await db.get(JobPreference, user_uuid)
+    except SQLAlchemyError:
+        raise HTTPException(status_code=500, detail="Database query failed")
+
+    return JobPreferencesResponse.model_validate(record)
+
+
+@router.get(
+    "/preferences",
+    response_model=JobPreferencesResponse,
+    summary="Get current user's job preferences",
+)
+async def get_preferences(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> JobPreferencesResponse:
+    try:
+        user_uuid = uuid.UUID(current_user["sub"])
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid user id in token")
+
+    try:
+        record = await db.get(JobPreference, user_uuid)
+    except SQLAlchemyError:
+        raise HTTPException(status_code=500, detail="Database query failed")
+
+    if record is None:
+        raise HTTPException(status_code=404, detail="No preferences set")
+
+    return JobPreferencesResponse.model_validate(record)
 
 
 @router.post(
@@ -314,7 +429,7 @@ async def trigger_crawl(
     if country not in ("US", "IN", "ALL"):
         raise HTTPException(status_code=422, detail="country must be 'US', 'IN', or 'ALL'")
 
-    from app.crawler.tasks import crawl_all_companies  # lazy — avoids Celery init at startup
+    from app.crawler.tasks import crawl_all_companies
 
     result = crawl_all_companies.delay(country)
     return {"status": "crawl started", "task_id": result.id}
@@ -331,7 +446,7 @@ async def trigger_alerts(
     if not settings.ADMIN_USER_ID or current_user["sub"] != settings.ADMIN_USER_ID:
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    from app.crawler.tasks import send_job_alerts  # lazy import
+    from app.crawler.tasks import send_job_alerts
 
     result = send_job_alerts.delay()
     return {"status": "alerts triggered", "task_id": result.id}
@@ -348,7 +463,7 @@ async def trigger_deactivate_stale(
     if not settings.ADMIN_USER_ID or current_user["sub"] != settings.ADMIN_USER_ID:
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    from app.crawler.tasks import deactivate_stale_jobs  # lazy import
+    from app.crawler.tasks import deactivate_stale_jobs
 
     result = deactivate_stale_jobs.delay()
     return {"status": "deactivation started", "task_id": result.id}

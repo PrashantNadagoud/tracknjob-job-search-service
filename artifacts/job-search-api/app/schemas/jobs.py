@@ -20,6 +20,8 @@ class JobListingItem(BaseModel):
     salary_range: str | None = None
     country: str = "US"
     last_seen_at: datetime | None = None
+    match_score: int | None = None
+    match_label: str | None = None
 
 
 class JobSearchResponse(BaseModel):
@@ -84,3 +86,23 @@ class SavedSearchListResponse(BaseModel):
 
 class HideJobRequest(BaseModel):
     job_id: uuid.UUID
+
+
+class JobPreferencesCreate(BaseModel):
+    desired_title: str | None = None
+    skills: list[str] = Field(default_factory=list)
+    preferred_location: str | None = None
+    remote_only: bool = False
+    seniority: str | None = None
+
+
+class JobPreferencesResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: uuid.UUID
+    desired_title: str | None = None
+    skills: list[str] = Field(default_factory=list)
+    preferred_location: str | None = None
+    remote_only: bool = False
+    seniority: str | None = None
+    updated_at: datetime | None = None
