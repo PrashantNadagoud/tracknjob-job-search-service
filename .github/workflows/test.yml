@@ -1,0 +1,64 @@
+name: TrackNJob CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: tnj
+          POSTGRES_PASSWORD: tnj
+          POSTGRES_DB: tnj_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    defaults:
+      run:
+        working-directory: artifacts/job-search-api
+
+    env:
+      TEST_DATABASE_URL: "postgresql://tnj:tnj@localhost:5432/tnj_test"
+      TNJ_SECRET_KEY: "ci-secret-key-not-for-production"
+      TNJ_FRONTEND_URL: "http://localhost:3000"
+      ADMIN_USER_ID: "test-admin-uuid"
+      RESEND_API_KEY: "test_key"
+      OPENAI_API_KEY: "test_key"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Enable pg_trgm extension
+        run: |
+          psql $TEST_DATABASE_URL -c "CREATE SCHEMA IF NOT EXISTS jobs;"
+          psql $TEST_DATABASE_URL -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+
+      - name: Run Alembic migrations
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: alembic upgrade head
+
+      - name: Run pytest
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: pytest -v --tb=short
