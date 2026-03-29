@@ -11,6 +11,7 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from app.crawler.base import BaseCrawler
+from app.crawler.geo_classifier import classify_listing
 
 logger = logging.getLogger(__name__)
 
@@ -74,16 +75,24 @@ class AmazonIndiaCrawler(BaseCrawler):
                     except ValueError:
                         posted_at = datetime.now(timezone.utc)
 
+                is_remote = "remote" in location.lower()
+                geo_restriction = classify_listing(
+                    location_raw=location,
+                    description="",
+                    work_type="remote" if is_remote else "",
+                    country=self.country,
+                )
                 jobs.append(
                     {
                         "title": title,
                         "company": "Amazon",
                         "location": location,
-                        "remote": "remote" in location.lower(),
+                        "remote": is_remote,
                         "source_url": source_url,
                         "source_label": self.source_label,
                         "posted_at": posted_at,
                         "country": self.country,
+                        "geo_restriction": geo_restriction,
                     }
                 )
             if len(batch) < page_size:
@@ -125,16 +134,24 @@ class AmazonIndiaCrawler(BaseCrawler):
             loc_el = card.find(attrs={"class": lambda c: c and "location" in c.lower()})
             location = loc_el.get_text(strip=True) if loc_el else "India"
 
+            is_remote = "remote" in location.lower()
+            geo_restriction = classify_listing(
+                location_raw=location,
+                description="",
+                work_type="remote" if is_remote else "",
+                country=self.country,
+            )
             jobs.append(
                 {
                     "title": title,
                     "company": "Amazon",
                     "location": location,
-                    "remote": "remote" in location.lower(),
+                    "remote": is_remote,
                     "source_url": source_url,
                     "source_label": self.source_label,
                     "posted_at": now,
                     "country": self.country,
+                    "geo_restriction": geo_restriction,
                 }
             )
         logger.info("AmazonIndiaCrawler (Playwright): parsed %d jobs", len(jobs))

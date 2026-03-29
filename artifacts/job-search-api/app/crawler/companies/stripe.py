@@ -12,6 +12,7 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from app.crawler.base import BaseCrawler
+from app.crawler.geo_classifier import classify_listing
 
 logger = logging.getLogger(__name__)
 
@@ -58,15 +59,25 @@ class StripeCrawler(BaseCrawler):
                 except ValueError:
                     posted_at = datetime.now(timezone.utc)
 
+            is_remote = "remote" in location.lower()
+            work_type = "remote" if is_remote else ""
+            geo_restriction = classify_listing(
+                location_raw=location,
+                description="",
+                work_type=work_type,
+                country=None,
+            )
+
             jobs.append(
                 {
                     "title": title,
                     "company": "Stripe",
                     "location": location,
-                    "remote": "remote" in location.lower(),
+                    "remote": is_remote,
                     "source_url": source_url,
                     "source_label": self.source_label,
                     "posted_at": posted_at,
+                    "geo_restriction": geo_restriction,
                 }
             )
         return jobs
@@ -90,6 +101,12 @@ class StripeCrawler(BaseCrawler):
                 title = a.get_text(strip=True)
                 if not title:
                     continue
+                geo_restriction = classify_listing(
+                    location_raw="",
+                    description="",
+                    work_type="",
+                    country=None,
+                )
                 jobs.append(
                     {
                         "title": title,
@@ -99,6 +116,7 @@ class StripeCrawler(BaseCrawler):
                         "source_url": url,
                         "source_label": self.source_label,
                         "posted_at": None,
+                        "geo_restriction": geo_restriction,
                     }
                 )
             return jobs

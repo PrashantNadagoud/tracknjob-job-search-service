@@ -113,6 +113,7 @@ class Listing(Base):
         sa.ForeignKey("jobs.companies.id"),
         nullable=True,
     )
+    geo_restriction: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class SavedSearch(Base):

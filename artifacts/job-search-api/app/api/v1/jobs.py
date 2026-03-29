@@ -6,7 +6,7 @@ from enum import Enum
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -116,6 +116,14 @@ async def search_jobs(
     company: str | None = Query(default=None, description="Filter by company name (partial match)"),
     posted: PostedFilter = Query(default=PostedFilter.any, description="Filter by posted_at recency"),
     country: str = Query(default="US", description="Country filter: US, IN, or ALL"),
+    market: str | None = Query(
+        default=None,
+        description=(
+            "Geo-restriction market filter: US (default), EU, or IN. "
+            "US shows US + GLOBAL + unprocessed rows; "
+            "EU shows EU + GLOBAL; IN shows IN + GLOBAL."
+        ),
+    ),
     sort_by: SortBy = Query(default=SortBy.posted_at, description="Sort results by: posted_at, match_score"),
     page: int = Query(default=1, ge=1, description="Page number"),
     limit: int = Query(default=20, ge=1, le=50, description="Results per page (max 50)"),
@@ -133,6 +141,7 @@ async def search_jobs(
             company=company,
             posted=posted,
             country=country,
+            market=market,
             sort_by=sort_by,
             page=page,
             limit=limit,
@@ -151,11 +160,28 @@ async def _execute_search(
     company: str | None,
     posted: PostedFilter,
     country: str,
+    market: str | None,
     sort_by: SortBy,
     page: int,
     limit: int,
 ) -> JobSearchResponse:
     stmt = select(Listing).where(Listing.is_active == True)  # noqa: E712
+
+    # ── Geo-restriction market filter ─────────────────────────────────────────
+    market_upper = (market or "US").upper()
+    if market_upper == "EU":
+        stmt = stmt.where(Listing.geo_restriction.in_(["EU", "GLOBAL"]))
+    elif market_upper == "IN":
+        stmt = stmt.where(Listing.geo_restriction.in_(["IN", "GLOBAL"]))
+    else:
+        # Default (US): show US + GLOBAL + legacy unprocessed rows (NULL)
+        stmt = stmt.where(
+            or_(
+                Listing.geo_restriction == "US",
+                Listing.geo_restriction == "GLOBAL",
+                Listing.geo_restriction.is_(None),
+            )
+        )
 
     try:
         user_uuid = uuid.UUID(user_id_str)

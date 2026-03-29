@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.crawler.base import BaseCrawler
+from app.crawler.geo_classifier import classify_listing, parse_greenhouse_location
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +26,8 @@ class CloudflareCrawler(BaseCrawler):
             if not source_url or not title:
                 continue
 
-            loc_obj = item.get("location", {})
-            location: str = (
-                loc_obj.get("name", "") if isinstance(loc_obj, dict) else str(loc_obj or "")
-            )
+            location_raw, country_hint = parse_greenhouse_location(item)
+            location: str = location_raw or ""
 
             updated_raw: str | None = item.get("updated_at")
             posted_at: datetime | None = None
@@ -40,6 +39,14 @@ class CloudflareCrawler(BaseCrawler):
                 except ValueError:
                     posted_at = datetime.now(timezone.utc)
 
+            work_type = "remote" if "remote" in location.lower() else ""
+            geo_restriction = classify_listing(
+                location_raw=location,
+                description="",
+                work_type=work_type,
+                country=country_hint,
+            )
+
             jobs.append(
                 {
                     "title": title,
@@ -49,6 +56,7 @@ class CloudflareCrawler(BaseCrawler):
                     "source_url": source_url,
                     "source_label": self.source_label,
                     "posted_at": posted_at,
+                    "geo_restriction": geo_restriction,
                 }
             )
         return jobs
