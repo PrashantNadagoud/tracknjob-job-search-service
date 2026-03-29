@@ -1,0 +1,75 @@
+EUROPE_SIGNALS = [
+    "germany", "france", "uk", "united kingdom", "netherlands",
+    "spain", "sweden", "poland", "ireland", "portugal", "italy",
+    "switzerland", "denmark", "norway", "finland", "austria",
+    "belgium", "czech republic", "romania",
+    "europe", "european union", "eu only", "emea",
+    "cet", "cest", "gmt+1", "gmt+2", "bst", "wet",
+    "right to work in europe", "eu work permit",
+]
+
+INDIA_SIGNALS = [
+    "india", "bangalore", "bengaluru", "hyderabad", "pune",
+    "mumbai", "chennai", "noida", "gurgaon", "apac",
+]
+
+US_SIGNALS = [
+    "united states", "usa", "u.s.", "new york", "san francisco",
+    "seattle", "austin", "chicago", "boston", "los angeles",
+    "denver", "atlanta", "dallas", "remote us", "remote - us",
+    "us only", "must be located in the us",
+]
+
+
+def detect_geo_restriction(location_raw: str, description: str = "") -> str | None:
+    """
+    Returns 'US', 'EU', 'IN', or None (no clear signal).
+    Checks location_raw first, then first 2000 chars of description.
+    US signals take priority — if a job says 'Remote US' it's US even if description
+    mentions European offices.
+    """
+    text = (location_raw + " " + description[:2000]).lower()
+
+    if any(sig in text for sig in US_SIGNALS):
+        return "US"
+    if any(sig in text for sig in EUROPE_SIGNALS):
+        return "EU"
+    if any(sig in text for sig in INDIA_SIGNALS):
+        return "IN"
+    return None
+
+
+def classify_listing(
+    location_raw: str,
+    description: str,
+    work_type: str,
+    country: str | None = None,
+) -> str:
+    """
+    Final classification used at ingest time.
+    'country' is the structured country field from ATS JSON (Ashby/Greenhouse/Lever)
+    if available. Pass None if not available.
+    Returns: 'US', 'EU', 'IN', or 'GLOBAL'
+    """
+    # Structured ATS country field: trust it over heuristics
+    if country:
+        c = country.lower().strip()
+        if c in ("us", "usa", "united states"):
+            return "US"
+        if c in ("gb", "uk", "de", "fr", "nl", "ie", "se", "pl", "es",
+                 "pt", "it", "ch", "dk", "no", "fi", "at", "be", "cz", "ro"):
+            return "EU"
+        if c in ("in", "india"):
+            return "IN"
+
+    restriction = detect_geo_restriction(location_raw, description)
+
+    if restriction:
+        return restriction
+
+    # No geo signals found + remote work type = truly global
+    if work_type in ("remote", "fully_remote"):
+        return "GLOBAL"
+
+    # Default: assume US (crawled from a US-targeted source)
+    return "US"
