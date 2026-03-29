@@ -48,7 +48,7 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
 )
 
 from app.main import app  # noqa: E402
-from app.models import HiddenJob, JobPreference, Listing, SavedSearch  # noqa: E402
+from app.models import Company, HiddenJob, JobPreference, Listing, SavedSearch  # noqa: E402
 
 
 # ── Test engine (NullPool so each call gets a fresh connection) ───────────────
@@ -128,6 +128,9 @@ async def cleanup_test_data():
         )
         await s.execute(
             text("DELETE FROM jobs.listings WHERE source_url LIKE 'http://test-%'")
+        )
+        await s.execute(
+            text("DELETE FROM jobs.companies WHERE slug LIKE 'test-%'")
         )
         await s.commit()
 

@@ -13,5 +13,13 @@ beat_schedule = {
         "task": "app.crawler.tasks.send_job_alerts",
         "schedule": crontab(minute="*/30"),
     },
+    "enrich-new-companies-nightly": {
+        "task": "app.enrichment.tasks.enrich_new_companies",
+        "schedule": crontab(minute=0, hour=2),
+    },
+    "reenrich-stale-companies-weekly": {
+        "task": "app.enrichment.tasks.reenrich_stale_companies",
+        "schedule": crontab(minute=0, hour=3, day_of_week="sunday"),
+    },
 }
 timezone = "UTC"

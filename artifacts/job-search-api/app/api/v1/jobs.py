@@ -13,7 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_current_user
 from app.config import get_settings
 from app.db import get_db
-from app.models import HiddenJob, JobPreference, Listing, SavedSearch
+from app.models import Company, HiddenJob, JobPreference, Listing, SavedSearch
+from app.schemas.companies import CompanySummary
 from app.schemas.jobs import (
     HideJobRequest,
     JobListingDetail,
@@ -58,6 +59,52 @@ _POSTED_CUTOFFS: dict[str, timedelta] = {
     "7d": timedelta(days=7),
     "30d": timedelta(days=30),
 }
+
+
+def _build_company_summary(
+    company: Company | None,
+    listing_salary_range: str | None,
+) -> CompanySummary | None:
+    if company is None:
+        return None
+
+    kwargs: dict = {}
+
+    company_type = company.company_type or "unknown"
+    kwargs["company_type"] = company_type
+
+    if company_type == "public":
+        if company.stock_ticker:
+            kwargs["stock_ticker"] = company.stock_ticker
+        if company.stock_exchange:
+            kwargs["stock_exchange"] = company.stock_exchange
+    else:
+        if company.last_funding_type:
+            kwargs["funding_stage"] = company.last_funding_type
+        if company.funding_total_usd:
+            kwargs["funding_total_usd"] = company.funding_total_usd
+
+    if company.num_employees_range:
+        kwargs["employee_range"] = company.num_employees_range
+    if company.culture_score:
+        kwargs["culture_score"] = company.culture_score
+    if company.remote_policy:
+        kwargs["remote_policy"] = company.remote_policy
+    if company.perks:
+        kwargs["perks"] = company.perks
+
+    if listing_salary_range:
+        kwargs["salary_source"] = "company_listed"
+    elif company.salary_min_usd is not None and company.salary_max_usd is not None:
+        kwargs["salary_min_usd"] = company.salary_min_usd
+        kwargs["salary_max_usd"] = company.salary_max_usd
+        if company.salary_source:
+            kwargs["salary_source"] = company.salary_source
+
+    if len(kwargs) <= 1 and list(kwargs.keys()) == ["company_type"]:
+        return None
+
+    return CompanySummary(**kwargs)
 
 
 @router.get("/search", response_model=JobSearchResponse, summary="Search job listings")
@@ -157,7 +204,16 @@ async def _execute_search(
 
     rows = (await db.execute(paginated)).scalars().all()
 
-    # Fetch preferences for scoring — never let this block the response
+    company_ids = {row.company_id for row in rows if row.company_id is not None}
+    company_map: dict[uuid.UUID, Company] = {}
+    if company_ids:
+        try:
+            co_stmt = select(Company).where(Company.id.in_(company_ids))
+            co_rows = (await db.execute(co_stmt)).scalars().all()
+            company_map = {co.id: co for co in co_rows}
+        except Exception:
+            logger.warning("Failed to fetch company data for search results")
+
     prefs: dict | None = None
     if user_uuid is not None:
         try:
@@ -174,10 +230,15 @@ async def _execute_search(
             logger.warning("Failed to fetch job preferences for scoring — defaulting to null scores")
             prefs = None
 
-    # Build result items with optional match scores
     results: list[JobListingItem] = []
     for row in rows:
         item = JobListingItem.model_validate(row)
+
+        co = company_map.get(row.company_id) if row.company_id else None
+        item = item.model_copy(update={
+            "company_summary": _build_company_summary(co, row.salary_range),
+        })
+
         if prefs is not None:
             job_dict = {
                 "title": row.title,
@@ -192,7 +253,6 @@ async def _execute_search(
             })
         results.append(item)
 
-    # Sort by match_score DESC (in-memory, within this page)
     if sort_by == SortBy.match_score and prefs is not None:
         results.sort(key=lambda x: (x.match_score or 0), reverse=True)
 

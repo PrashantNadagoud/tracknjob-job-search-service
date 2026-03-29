@@ -94,3 +94,47 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 ### `scripts` (`@workspace/scripts`)
 
 Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.
+
+---
+
+## TrackNJob — Job Search API (Python microservice)
+
+Standalone Python FastAPI service at `artifacts/job-search-api/`. All work is pushed to `PrashantNadagoud/tracknjob-job-search-service` on GitHub.
+
+### Stack
+- **Python 3.10**, FastAPI 0.104+
+- **SQLAlchemy 2.0 async** (asyncpg), Alembic migrations
+- **PostgreSQL 14** — `jobs` schema, `pg_trgm` extension for FTS
+- **Redis + Celery 5** beat scheduler
+- **JWT HS256** via python-jose (`TNJ_SECRET_KEY` env var)
+- **httpx + BeautifulSoup4** for enrichment scraping
+
+### Features (Sessions 1–13)
+- Auth: HS256 JWT, `get_current_user` dependency
+- Search: FTS (tsvector), remote/country/source/company/posted filters, pagination, sort by match_score
+- Ghost job detection: pg_trgm similarity > 0.85, stale deactivation
+- Saved searches + job alerts via Resend email
+- Hidden jobs per user
+- Job match scoring against user preferences
+- Company Intel & Salary Enrichment Pipeline (Session 13):
+  - `jobs.companies` table with 20+ fields (migration 0006)
+  - `company_id` FK on `jobs.listings`
+  - `CompanyEnricher`: Crunchbase, Comparably, BuiltIn, Glassdoor (concurrent via `asyncio.gather`)
+  - Wikipedia API fallback + Yahoo Finance for public companies
+  - Celery beat: `enrich_new_companies` (nightly 2AM UTC), `reenrich_stale_companies` (Sunday 3AM UTC)
+  - `GET /api/v1/companies/{slug}` endpoint
+  - `company_summary` nested object on search results (null-fields omitted via Pydantic `model_serializer`)
+  - Salary display rule: `company_listed` wins over Glassdoor; both absent → keys omitted entirely
+
+### Migrations
+- 0001: initial (listings, users)
+- 0002: country column
+- 0003: ghost job detection (pg_trgm)
+- 0004: job alerts (saved_searches)
+- 0005: job preferences (match scoring)
+- 0006: companies table + company_id FK on listings
+
+### Tests
+- 53 pytest tests (asyncio_mode=auto, NullPool engine, autouse cleanup by UUID + source_url prefix)
+- `pytest.ini` in `artifacts/job-search-api/`
+- CI: `.github/workflows/test.yml` (PostgreSQL 14 service, pg_trgm, Alembic, pytest)

@@ -3,6 +3,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.companies import CompanySummary
+
 
 class JobListingItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -22,6 +24,7 @@ class JobListingItem(BaseModel):
     last_seen_at: datetime | None = None
     match_score: int | None = None
     match_label: str | None = None
+    company_summary: CompanySummary | None = None
 
 
 class JobSearchResponse(BaseModel):

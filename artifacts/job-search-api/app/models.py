@@ -1,9 +1,13 @@
 import uuid
+from decimal import Decimal
 
 import sqlalchemy as sa
 from sqlalchemy import (
     Boolean,
+    Date,
     Index,
+    Integer,
+    Numeric,
     Text,
     func,
 )
@@ -18,6 +22,40 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 class Base(DeclarativeBase):
     pass
+
+
+class Company(Base):
+    __tablename__ = "companies"
+    __table_args__ = {"schema": "jobs"}
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    website: Mapped[str | None] = mapped_column(Text, nullable=True)
+    funding_total_usd: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
+    last_funding_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_funding_date: Mapped[Date | None] = mapped_column(Date, nullable=True)
+    num_employees_range: Mapped[str | None] = mapped_column(Text, nullable=True)
+    founded_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    culture_score: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ceo_approval_pct: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    work_life_score: Mapped[Decimal | None] = mapped_column(Numeric(3, 1), nullable=True)
+    remote_policy: Mapped[str | None] = mapped_column(Text, nullable=True)
+    perks: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    salary_min_usd: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    salary_max_usd: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    salary_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enriched_at: Mapped[TIMESTAMP | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    enrichment_source: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    company_type: Mapped[str] = mapped_column(Text, server_default="unknown", nullable=False)
+    stock_ticker: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stock_exchange: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Listing(Base):
@@ -69,6 +107,11 @@ class Listing(Base):
     )
     last_seen_at: Mapped[TIMESTAMP | None] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=True
+    )
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        sa.ForeignKey("jobs.companies.id"),
+        nullable=True,
     )
 
 
