@@ -146,7 +146,10 @@ async def search_jobs(
             page=page,
             limit=limit,
         )
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
+        print(f"Database error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail="Database query failed")
 
 
@@ -313,7 +316,10 @@ async def get_job_sources(
             .order_by(Listing.source_label)
         )
         rows = (await db.execute(stmt)).all()
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
+        print(f"Database error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return JobSourcesResponse(
@@ -370,7 +376,10 @@ async def upsert_preferences(
         )
         await db.flush()
         record = await db.get(JobPreference, user_uuid)
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
+        print(f"Database error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return JobPreferencesResponse.model_validate(record)
@@ -392,7 +401,10 @@ async def get_preferences(
 
     try:
         record = await db.get(JobPreference, user_uuid)
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
+        print(f"Database error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail="Database query failed")
 
     if record is None:
@@ -433,7 +445,10 @@ async def create_saved_search(
         db.add(record)
         await db.flush()
         await db.refresh(record)
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
+        print(f"Database error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return SavedSearchResponse.model_validate(record)
@@ -460,7 +475,10 @@ async def list_saved_searches(
             .order_by(SavedSearch.created_at.desc())
         )
         rows = (await db.execute(stmt)).scalars().all()
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
+        print(f"Database error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return SavedSearchListResponse(
@@ -493,7 +511,10 @@ async def hide_job(
     except IntegrityError:
         await db.rollback()
         raise HTTPException(status_code=409, detail="Job already hidden")
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
+        print(f"Database error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return Response(status_code=204)
@@ -563,7 +584,10 @@ async def get_job(
 ) -> JobListingDetail:
     try:
         row = await db.get(Listing, job_id)
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
+        print(f"Database error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail="Database query failed")
 
     if row is None or not row.is_active:

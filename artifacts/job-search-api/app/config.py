@@ -14,7 +14,11 @@ class Settings(BaseSettings):
     ADMIN_USER_ID: str = ""
     CRUNCHBASE_API_KEY: str = ""
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_file": ".env", 
+        "env_file_encoding": "utf-8",
+        "extra": "ignore"
+    }
 
 
 @lru_cache
