@@ -27,6 +27,12 @@ async def get_current_user(request: Request) -> dict:
         raise _UnauthorizedError("Invalid or expired token")
 
     sub = payload.get("sub")
+    # Map the email from the core app token to a deterministic UUID for the job search service
+    if sub and "@" in sub:
+        import uuid
+        import hashlib
+        sub = str(uuid.UUID(hashlib.md5(sub.encode()).hexdigest()))
+
     if not sub:
         raise _UnauthorizedError("Token missing subject claim")
 
