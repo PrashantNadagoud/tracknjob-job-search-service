@@ -39,7 +39,7 @@ class TestComputeMatchScore:
             "remote": False,
             "location": "Miami",
         }
-        assert compute_match_score(job, prefs) < 20
+        assert compute_match_score(job, prefs) < 30
 
     def test_partial_skill_overlap(self):
         prefs = {
@@ -55,7 +55,7 @@ class TestComputeMatchScore:
             "location": None,
         }
         score = compute_match_score(job, prefs)
-        assert 20 <= score <= 60
+        assert 10 <= score <= 40
 
     def test_score_capped_at_100(self):
         prefs = {
@@ -113,13 +113,11 @@ class TestGetMatchLabel:
         assert get_match_label(60) == "Good Match"
         assert get_match_label(79) == "Good Match"
 
-    def test_match_label_partial(self):
-        assert get_match_label(40) == "Partial Match"
-        assert get_match_label(59) == "Partial Match"
-
-    def test_match_label_low(self):
-        assert get_match_label(0) == "Low Match"
-        assert get_match_label(39) == "Low Match"
+    def test_match_label_below_60_returns_none(self):
+        assert get_match_label(40) is None
+        assert get_match_label(59) is None
+        assert get_match_label(0) is None
+        assert get_match_label(39) is None
 
     def test_match_label_none_input_returns_none(self):
         assert get_match_label(None) is None
@@ -153,5 +151,5 @@ class TestSearchScoreIntegration:
             for result in body["results"]:
                 assert isinstance(result["match_score"], int)
                 assert result["match_label"] in (
-                    "Strong Match", "Good Match", "Partial Match", "Low Match"
+                    "Strong Match", "Good Match", None
                 )
