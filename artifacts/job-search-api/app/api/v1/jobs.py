@@ -274,6 +274,7 @@ async def _execute_search(
                 "tags": row.tags,
                 "remote": row.remote,
                 "location": row.location,
+                "salary_range": row.salary_range,
             }
             score = compute_match_score(job_dict, prefs)
             item = item.model_copy(update={

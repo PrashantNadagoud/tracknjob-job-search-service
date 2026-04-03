@@ -11,7 +11,8 @@ from tests.conftest import TEST_USER_ID
 
 
 class TestComputeMatchScore:
-    def test_perfect_match_scores_100(self):
+    def test_perfect_match_no_salary(self):
+        """Title(40) + Skills(45 fallback) + Remote(15) = 100."""
         prefs = {
             "desired_title": "Senior Python Engineer",
             "skills": ["Python", "FastAPI"],
@@ -26,6 +27,48 @@ class TestComputeMatchScore:
         }
         assert compute_match_score(job, prefs) == 100
 
+    def test_perfect_match_with_salary(self):
+        """Title(40) + Skills(35) + Remote(15) + Salary(10) = 100."""
+        prefs = {
+            "desired_title": "Senior Python Engineer",
+            "skills": ["Python", "FastAPI"],
+            "preferred_location": None,
+            "remote_only": True,
+            "salary_expected": True,
+        }
+        job = {
+            "title": "Senior Python Engineer",
+            "tags": ["Python", "FastAPI"],
+            "remote": True,
+            "location": None,
+            "salary_range": "$120k-$180k",
+        }
+        assert compute_match_score(job, prefs) == 100
+
+    def test_salary_fallback_boosts_skills(self):
+        """Without salary data, skills weight goes from 35 to 45."""
+        prefs = {
+            "desired_title": None,
+            "skills": ["Python", "FastAPI", "PostgreSQL", "AWS"],
+            "preferred_location": None,
+            "remote_only": False,
+        }
+        job_no_salary = {
+            "title": "Any",
+            "tags": ["Python", "FastAPI", "PostgreSQL", "AWS"],
+            "remote": False,
+            "location": None,
+        }
+        job_with_salary = {
+            **job_no_salary,
+            "salary_range": "$100k-$150k",
+        }
+        score_no_salary = compute_match_score(job_no_salary, prefs)
+        score_with_salary = compute_match_score(job_with_salary, prefs)
+        # No salary → skills get 45pts; with salary → skills get 35pts
+        assert score_no_salary == 45
+        assert score_with_salary == 35
+
     def test_no_overlap_scores_low(self):
         prefs = {
             "desired_title": "Senior Python Engineer",
@@ -39,7 +82,7 @@ class TestComputeMatchScore:
             "remote": False,
             "location": "Miami",
         }
-        assert compute_match_score(job, prefs) < 30
+        assert compute_match_score(job, prefs) < 20
 
     def test_partial_skill_overlap(self):
         prefs = {
@@ -55,7 +98,8 @@ class TestComputeMatchScore:
             "location": None,
         }
         score = compute_match_score(job, prefs)
-        assert 10 <= score <= 40
+        # 2/3 overlap * 45 (fallback) = 30
+        assert 20 <= score <= 35
 
     def test_score_capped_at_100(self):
         prefs = {
@@ -113,11 +157,13 @@ class TestGetMatchLabel:
         assert get_match_label(60) == "Good Match"
         assert get_match_label(79) == "Good Match"
 
-    def test_match_label_below_60_returns_none(self):
-        assert get_match_label(40) is None
-        assert get_match_label(59) is None
-        assert get_match_label(0) is None
-        assert get_match_label(39) is None
+    def test_match_label_partial(self):
+        assert get_match_label(40) == "Partial Match"
+        assert get_match_label(59) == "Partial Match"
+
+    def test_match_label_low(self):
+        assert get_match_label(0) == "Low Match"
+        assert get_match_label(39) == "Low Match"
 
     def test_match_label_none_input_returns_none(self):
         assert get_match_label(None) is None
@@ -151,5 +197,5 @@ class TestSearchScoreIntegration:
             for result in body["results"]:
                 assert isinstance(result["match_score"], int)
                 assert result["match_label"] in (
-                    "Strong Match", "Good Match", None
+                    "Strong Match", "Good Match", "Partial Match", "Low Match"
                 )
