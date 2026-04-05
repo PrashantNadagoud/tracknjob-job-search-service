@@ -488,6 +488,37 @@ async def list_saved_searches(
     )
 
 
+@router.delete(
+    "/saved-searches/{search_id}",
+    status_code=204,
+    summary="Delete a saved search",
+)
+async def delete_saved_search(
+    search_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> Response:
+    try:
+        user_uuid = uuid.UUID(current_user["sub"])
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid user id in token")
+
+    try:
+        record = await db.get(SavedSearch, search_id)
+        if record is None or record.user_id != user_uuid:
+            raise HTTPException(status_code=404, detail="Saved search not found")
+
+        await db.delete(record)
+        await db.flush()
+    except HTTPException:
+        raise
+    except SQLAlchemyError as e:
+        logger.error(f"Database error deleting saved search: {e}")
+        raise HTTPException(status_code=500, detail="Database query failed")
+
+    return Response(status_code=204)
+
+
 @router.post("/hidden", status_code=204, summary="Hide a job listing for the current user")
 async def hide_job(
     body: HideJobRequest,
