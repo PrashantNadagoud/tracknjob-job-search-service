@@ -1,10 +1,10 @@
-"""Acceptance tests for Session 13 — Company Intel & Salary Enrichment Pipeline.
+"""Acceptance tests for Company Intel & Salary Enrichment Pipeline.
 
 Tests cover:
   1. GET /api/v1/companies/{slug} — 404 and 200
   2. Search includes company_summary when company data exists
   3. Search returns company_summary: null for listings with no company match
-  4. Partial enrichment: only crunchbase succeeds
+  4. Partial enrichment: only wikipedia succeeds
   5. Public company shows stock fields, not funding fields
   6. Glassdoor salary appears in company_summary
   7. When Glassdoor fails, salary keys are absent from company_summary
@@ -345,34 +345,39 @@ class TestSearchCompanySummary:
 
 
 class TestEnrichmentPipeline:
-    async def test_partial_enrichment_saves_crunchbase_only(self):
-        from app.enrichment.enricher import CompanyEnricher, CompanyRecord
+    async def test_partial_enrichment_saves_wikipedia_only(self):
+        """Wikipedia succeeds; all other sources fail → partial record is saved."""
+        from app.enrichment.enricher import CompanyEnricher
+        from app.enrichment.wikipedia import WikipediaResult
 
-        async def mock_cb(slug, name):
-            from app.enrichment.crunchbase import CrunchbaseResult
-            r = CrunchbaseResult()
-            r.funding_total_usd = 50_000_000
-            r.last_funding_type = "Series A"
-            r.company_type = "private"
-            r.sources = ["crunchbase"]
-            return r
+        wiki_result = WikipediaResult(
+            founded_year=2009,
+            num_employees_range="1001-5000",
+            company_type="public",
+            stock_ticker="NET",
+            stock_exchange="NYSE",
+            sources=["wikipedia"],
+        )
 
         async def fail(*a, **kw):
             raise RuntimeError("source unavailable")
 
         enricher = CompanyEnricher()
         with (
-            patch("app.enrichment.enricher.enrich_from_crunchbase", mock_cb),
+            patch("app.enrichment.enricher.enrich_from_wikipedia", AsyncMock(return_value=wiki_result)),
+            patch("app.enrichment.enricher.enrich_from_linkedin", fail),
             patch("app.enrichment.enricher.enrich_from_comparably", fail),
             patch("app.enrichment.enricher.enrich_from_builtin", fail),
             patch("app.enrichment.enricher.enrich_salary_from_glassdoor", fail),
+            patch("app.enrichment.enricher.asyncio.sleep", new_callable=AsyncMock),
         ):
             record = await enricher.enrich("test-acme", "Acme", "Engineer", "US")
 
-        assert record.funding_total_usd == 50_000_000
-        assert record.last_funding_type == "Series A"
-        assert record.company_type == "private"
-        assert "crunchbase" in record.enrichment_source
+        # funding fields are always null — no free source populates them
+        assert record.funding_total_usd is None
+        assert record.last_funding_type is None
+        assert record.company_type == "public"
+        assert "wikipedia" in record.enrichment_source
         assert "comparably" not in record.enrichment_source
         assert record.culture_score is None
         assert record.salary_min_usd is None
@@ -398,7 +403,7 @@ class TestEnrichmentPipeline:
             return CompanyRecord(
                 slug=company_slug,
                 name=company_name,
-                enrichment_source=["crunchbase"],
+                enrichment_source=["wikipedia"],
                 company_type="private",
                 enriched_at=datetime.now(timezone.utc),
             )
@@ -449,7 +454,7 @@ class TestEnrichmentPipeline:
             return CompanyRecord(
                 slug=company_slug,
                 name=company_name,
-                enrichment_source=["crunchbase"],
+                enrichment_source=["wikipedia"],
                 company_type="private",
                 enriched_at=datetime.now(timezone.utc),
             )
