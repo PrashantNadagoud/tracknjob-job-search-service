@@ -101,7 +101,7 @@ def _build_company_summary(
         if company.salary_source:
             kwargs["salary_source"] = company.salary_source
 
-    if len(kwargs) <= 1 and list(kwargs.keys()) == ["company_type"]:
+    if len(kwargs) == 0:
         return None
 
     return CompanySummary(**kwargs)
@@ -168,6 +168,7 @@ async def _execute_search(
     page: int,
     limit: int,
 ) -> JobSearchResponse:
+    logger.info(f"Executing search with q={q}, company={company}")
     stmt = select(Listing).where(Listing.is_active == True)  # noqa: E712
 
     # ── Geo-restriction market filter ─────────────────────────────────────────
@@ -232,17 +233,12 @@ async def _execute_search(
     )
 
     rows = (await db.execute(paginated)).scalars().all()
+    logger.info(f"Found {len(rows)} rows")
 
     company_ids = {row.company_id for row in rows if row.company_id is not None}
-    company_map: dict[uuid.UUID, Company] = {}
-    if company_ids:
-        try:
-            co_stmt = select(Company).where(Company.id.in_(company_ids))
-            co_rows = (await db.execute(co_stmt)).scalars().all()
-            company_map = {co.id: co for co in co_rows}
-        except Exception:
-            logger.warning("Failed to fetch company data for search results")
-
+    logger.info(f"Found company_ids: {company_ids}")
+    company_map: dict[uuid.UUID, Company] = {co.id: co for co in (await db.execute(select(Company).where(Company.id.in_(company_ids)))).scalars().all()} if company_ids else {}
+    
     prefs: dict | None = None
     if user_uuid is not None:
         try:
@@ -264,8 +260,14 @@ async def _execute_search(
         item = JobListingItem.model_validate(row)
 
         co = company_map.get(row.company_id) if row.company_id else None
+        summary = _build_company_summary(co, row.salary_range)
+        if co:
+            logger.info(f"Listing {row.id} has company {co.name}, summary: {summary}")
+        else:
+            logger.info(f"Listing {row.id} has no company data (company_id: {row.company_id})")
+
         item = item.model_copy(update={
-            "company_summary": _build_company_summary(co, row.salary_range),
+            "company_summary": summary,
         })
 
         if prefs is not None:
