@@ -14,11 +14,25 @@ class Settings(BaseSettings):
     ADMIN_USER_ID: str = ""
     CRUNCHBASE_API_KEY: str = ""
 
+    # Crawler seed configuration (comma-separated lists)
+    NAUKRI_KEYWORD_LIST: str = "software engineer,data engineer,product manager"
+    FOUNDIT_KEYWORD_LIST: str = "software engineer,backend developer"
+    WORKDAY_SEED_SLUGS: str = "google,microsoft,amazon,apple,meta,netflix,stripe,airbnb,uber,lyft"
+
     model_config = {
-        "env_file": ".env", 
+        "env_file": ".env",
         "env_file_encoding": "utf-8",
         "extra": "ignore"
     }
+
+    def naukri_keywords(self) -> list[str]:
+        return [k.strip() for k in self.NAUKRI_KEYWORD_LIST.split(",") if k.strip()]
+
+    def foundit_keywords(self) -> list[str]:
+        return [k.strip() for k in self.FOUNDIT_KEYWORD_LIST.split(",") if k.strip()]
+
+    def workday_seed_slugs(self) -> list[str]:
+        return [s.strip() for s in self.WORKDAY_SEED_SLUGS.split(",") if s.strip()]
 
 
 @lru_cache
