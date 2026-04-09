@@ -275,7 +275,11 @@ async def _async_summarize(job_id: str) -> None:
 
 
 async def _async_deactivate_stale() -> int:
-    """Set is_active=FALSE for all jobs not seen in the last 12 hours.
+    """Set is_active=FALSE for legacy (non-ATS) jobs not seen in the last 12 hours.
+
+    ATS-tracked listings (ats_type IS NOT NULL) use a separate 3-day staleness
+    window enforced by ``run_crawl_pipeline``; they are intentionally excluded here
+    so the 12h rule does not override the 3-day ATS rule.
 
     Returns the number of rows deactivated.
     """
@@ -288,6 +292,7 @@ async def _async_deactivate_stale() -> int:
                 SET    is_active = FALSE
                 WHERE  last_seen_at < NOW() - INTERVAL '12 hours'
                   AND  is_active = TRUE
+                  AND  ats_type IS NULL
             """)
         )
         await session.commit()

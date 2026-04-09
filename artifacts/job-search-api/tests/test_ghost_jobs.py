@@ -231,3 +231,36 @@ class TestGhostJobs:
         assert row is not None
         assert row.is_active is True
         assert row.last_seen_at >= inactive.last_seen_at
+
+    async def test_ats_listing_not_deactivated_by_12h_rule(self, db_session: AsyncSession):
+        """ATS-tracked listings (ats_type IS NOT NULL) are exempt from the 12-hour
+        deactivation rule; they use the 3-day window in run_crawl_pipeline."""
+        suffix = uuid.uuid4().hex[:10]
+        ats_job = Listing(
+            title="ATS Job",
+            company="ATSCorp",
+            location="Remote",
+            remote=True,
+            source_url=f"http://test-ats-stale-{suffix}",
+            source_label="workday",
+            posted_at=_now(),
+            country="US",
+            last_seen_at=_now() - timedelta(hours=25),  # >12h but <3d
+            is_active=True,
+            ats_type="workday",
+            external_job_id=f"ats-ext-{suffix}",
+        )
+        db_session.add(ats_job)
+        await db_session.flush()
+        ats_job_id = ats_job.id
+        await db_session.commit()
+
+        await _async_deactivate_stale()
+
+        from tests.conftest import _TestSession
+        async with _TestSession() as s:
+            row = await s.get(Listing, ats_job_id)
+        assert row is not None
+        assert row.is_active is True, (
+            "ATS listing must remain active at 25h — only the 3-day pipeline rule applies"
+        )
