@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -13,7 +14,7 @@ from sqlalchemy import pool, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.celery_app import celery_app
-from app.models import Listing, SavedSearch
+from app.models import AtsSource, Company, CompanyDiscoveryQueue, Listing, SavedSearch
 
 logger = logging.getLogger(__name__)
 
@@ -470,3 +471,380 @@ def deactivate_stale_jobs() -> dict[str, int]:  # type: ignore[override]
 def send_job_alerts() -> dict[str, int]:  # type: ignore[override]
     """Send job alert emails for all saved searches that have new results."""
     return asyncio.run(_async_send_job_alerts())
+
+
+# ---------------------------------------------------------------------------
+# ATS pipeline async helpers
+# ---------------------------------------------------------------------------
+
+async def _upsert_ats_jobs(
+    jobs: list[dict[str, Any]],
+    session_maker: async_sessionmaker[AsyncSession],
+) -> list[str]:
+    """Upsert ATS-sourced job listings using the ATS dedup key.
+
+    Dedup priority:
+    1. (company_id, ats_type, external_job_id) — ATS-native key (when all set)
+    2. source_url — fall back for jobs without external_job_id
+    3. INSERT — truly new job
+
+    Also populates ``title_normalized`` and ``seniority_level`` via the
+    title normalizer.
+
+    Returns list of newly inserted UUIDs.
+    """
+    from app.utils.title_normalizer import extract_seniority, normalize_title
+
+    new_ids: list[str] = []
+    now = datetime.now(timezone.utc)
+
+    async with session_maker() as session:
+        for job in jobs:
+            source_url = (job.get("source_url") or "").strip()
+            if not source_url:
+                continue
+
+            raw_title: str = job.get("title") or ""
+            title_normalized = normalize_title(raw_title) or raw_title
+            seniority_level = extract_seniority(title_normalized)
+
+            company_id: uuid.UUID | None = job.get("company_id")
+            ats_type: str | None = job.get("ats_type")
+            external_job_id: str | None = job.get("external_job_id")
+
+            existing: Listing | None = None
+
+            # 1. ATS dedup key
+            if company_id and ats_type and external_job_id:
+                existing = (
+                    await session.execute(
+                        select(Listing).where(
+                            Listing.company_id == company_id,
+                            Listing.ats_type == ats_type,
+                            Listing.external_job_id == external_job_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+
+            # 2. source_url fallback
+            if existing is None and source_url:
+                existing = (
+                    await session.execute(
+                        select(Listing).where(Listing.source_url == source_url)
+                    )
+                ).scalar_one_or_none()
+
+            if existing is not None:
+                existing.last_seen_at = now
+                existing.title_normalized = title_normalized
+                existing.seniority_level = seniority_level
+                if not existing.is_active:
+                    existing.is_active = True
+                    logger.info(
+                        "Reactivated ATS job: %s @ %s", existing.title, existing.company
+                    )
+                # Backfill ATS fields if they were missing
+                if existing.ats_type is None and ats_type:
+                    existing.ats_type = ats_type
+                if existing.ats_source_id is None and job.get("ats_source_id"):
+                    existing.ats_source_id = job["ats_source_id"]
+                if existing.external_job_id is None and external_job_id:
+                    existing.external_job_id = external_job_id
+            else:
+                # New listing
+                listing = Listing(
+                    title=raw_title,
+                    company=job.get("company") or "",
+                    location=job.get("location"),
+                    remote=bool(job.get("remote", False)),
+                    source_url=source_url,
+                    source_label=job.get("source_label"),
+                    posted_at=job.get("posted_at"),
+                    country=job.get("country") or "US",
+                    geo_restriction=job.get("geo_restriction"),
+                    company_id=company_id,
+                    ats_type=ats_type,
+                    ats_source_id=job.get("ats_source_id"),
+                    external_job_id=external_job_id,
+                    title_normalized=title_normalized,
+                    seniority_level=seniority_level,
+                    employment_type=job.get("employment_type"),
+                    department=job.get("department"),
+                    salary_currency=job.get("salary_currency") or "USD",
+                    salary_min_local=job.get("salary_min_local"),
+                    salary_max_local=job.get("salary_max_local"),
+                    salary_period=job.get("salary_period") or "annual",
+                    last_seen_at=now,
+                )
+                session.add(listing)
+                await session.flush()
+                new_ids.append(str(listing.id))
+                logger.info(
+                    "Inserted ATS job: %s @ %s [%s]", raw_title, job.get("company"), ats_type
+                )
+
+        await session.commit()
+
+    return new_ids
+
+
+def _slugify(name: str) -> str:
+    """Convert a company name to a URL-safe slug."""
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return slug or "unknown"
+
+
+async def _async_run_crawl_pipeline() -> dict[str, Any]:
+    """Query due ATS sources, dispatch each, upsert results, mark stale.
+
+    - Queries ats_sources WHERE is_active AND last_crawled_at due AND backoff clear.
+    - Dispatches each through CrawlDispatcher.
+    - Upserts with ATS dedup key (company_id, ats_type, external_job_id).
+    - Marks ATS-tracked listings with last_seen_at > 3 days old as is_active=FALSE.
+    """
+    from app.crawler.dispatcher import CrawlDispatcher
+
+    Session = _make_session()
+    dispatcher = CrawlDispatcher()
+
+    # Fetch all due source IDs (read-only, separate session)
+    async with Session() as session:
+        result = await session.execute(
+            text("""
+                SELECT id FROM jobs.ats_sources
+                WHERE is_active = TRUE
+                  AND (
+                    last_crawled_at IS NULL
+                    OR last_crawled_at < NOW() - INTERVAL '20 hours'
+                  )
+                  AND (
+                    backoff_until IS NULL
+                    OR backoff_until < NOW()
+                  )
+                ORDER BY last_crawled_at ASC NULLS FIRST
+            """)
+        )
+        source_ids: list[uuid.UUID] = [row[0] for row in result]
+
+    logger.info("run_crawl_pipeline: %d due source(s) to crawl", len(source_ids))
+
+    sources_crawled = 0
+    total_jobs = 0
+    new_ids_all: list[str] = []
+
+    for source_id in source_ids:
+        try:
+            async with Session() as session:
+                jobs = await dispatcher.dispatch(source_id, session)
+
+            if jobs:
+                new_ids = await _upsert_ats_jobs(jobs, Session)
+                new_ids_all.extend(new_ids)
+                total_jobs += len(jobs)
+
+            sources_crawled += 1
+        except Exception:
+            logger.exception("run_crawl_pipeline: unhandled error for source_id=%s", source_id)
+
+    # Queue AI summaries for newly inserted jobs
+    queued = 0
+    for job_id in new_ids_all:
+        try:
+            generate_job_summary.delay(job_id)
+            queued += 1
+        except Exception:
+            logger.warning(
+                "run_crawl_pipeline: could not queue summarization for %s", job_id
+            )
+
+    # Mark ATS-tracked listings stale after 3 days (not seen in this cycle)
+    async with Session() as session:
+        result = await session.execute(
+            text("""
+                UPDATE jobs.listings
+                SET    is_active = FALSE
+                WHERE  ats_type IS NOT NULL
+                  AND  last_seen_at < NOW() - INTERVAL '3 days'
+                  AND  is_active = TRUE
+            """)
+        )
+        stale_count: int = result.rowcount
+        await session.commit()
+
+    logger.info(
+        "run_crawl_pipeline: sources=%d jobs=%d new=%d stale_deactivated=%d",
+        sources_crawled, total_jobs, len(new_ids_all), stale_count,
+    )
+    return {
+        "sources_crawled": sources_crawled,
+        "total_jobs": total_jobs,
+        "new_job_ids": len(new_ids_all),
+        "summaries_queued": queued,
+        "stale_deactivated": stale_count,
+    }
+
+
+async def _process_discovery_item(
+    item_id: uuid.UUID,
+    Session: async_sessionmaker[AsyncSession],
+    dispatcher: "CrawlDispatcher",  # type: ignore[name-defined]
+) -> str:
+    """Probe a single CompanyDiscoveryQueue item via CrawlDispatcher.
+
+    Returns one of: 'resolved', 'failed', 'rejected', 'skipped'.
+    """
+    # Step 1: Read item details and ensure Company + AtsSource rows exist
+    async with Session() as session:
+        item = await session.get(CompanyDiscoveryQueue, item_id)
+        if item is None or item.status != "pending":
+            return "skipped"
+
+        ats_type: str = item.suspected_ats or "workday"
+        company_slug = _slugify(item.company_name) + "-discovery"
+
+        # Get or create Company
+        company: Company | None = (
+            await session.execute(
+                select(Company).where(Company.slug == company_slug)
+            )
+        ).scalar_one_or_none()
+
+        if company is None:
+            company = Company(
+                slug=company_slug,
+                name=item.company_name,
+                website=item.website,
+                primary_ats_type=ats_type,
+            )
+            session.add(company)
+            await session.flush()
+
+        company_id: uuid.UUID = company.id
+
+        # Get or create AtsSource
+        ats_source: AtsSource | None = (
+            await session.execute(
+                select(AtsSource).where(
+                    AtsSource.company_id == company_id,
+                    AtsSource.ats_type == ats_type,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if ats_source is None:
+            ats_source = AtsSource(
+                company_id=company_id,
+                ats_type=ats_type,
+                ats_slug=item.suspected_slug,
+                market=item.market,
+                discovery_source=item.source,
+            )
+            session.add(ats_source)
+            await session.flush()
+
+        ats_source_id: uuid.UUID = ats_source.id
+        await session.commit()
+
+    # Step 2: Probe via dispatcher (dispatch uses its own session internally)
+    async with Session() as session:
+        jobs = await dispatcher.dispatch(ats_source_id, session)
+
+    # Step 3: Update discovery queue item based on result
+    now = datetime.now(timezone.utc)
+    async with Session() as session:
+        item = await session.get(CompanyDiscoveryQueue, item_id)
+        if item is None:
+            return "skipped"
+
+        item.last_attempted_at = now
+        item.attempt_count = (item.attempt_count or 0) + 1
+
+        if jobs:
+            item.status = "resolved"
+            item.resolved_company_id = company_id
+            await session.commit()
+            logger.info(
+                "run_discovery_queue: resolved company=%s ats_type=%s jobs=%d",
+                item.company_name, ats_type, len(jobs),
+            )
+            return "resolved"
+
+        # Probe returned no jobs
+        if item.attempt_count >= 3:
+            item.status = "rejected"
+            item.error_message = f"Exhausted {item.attempt_count} probe attempts with no results"
+            await session.commit()
+            logger.info(
+                "run_discovery_queue: rejected company=%s ats_type=%s after %d attempt(s)",
+                item.company_name, ats_type, item.attempt_count,
+            )
+            return "rejected"
+
+        await session.commit()
+        logger.info(
+            "run_discovery_queue: attempt %d/3 failed for company=%s ats_type=%s",
+            item.attempt_count, item.company_name, ats_type,
+        )
+        return "failed"
+
+
+async def _async_run_discovery_queue() -> dict[str, Any]:
+    """Process up to 50 pending rows from company_discovery_queue.
+
+    For each row:
+    - Creates a temporary Company + AtsSource if they don't exist.
+    - Probes via CrawlDispatcher.dispatch().
+    - On success: sets status='resolved', resolved_company_id.
+    - On failure: increments attempt_count; sets status='rejected' at >= 3 attempts.
+    """
+    from app.crawler.dispatcher import CrawlDispatcher
+
+    Session = _make_session()
+    dispatcher = CrawlDispatcher()
+
+    async with Session() as session:
+        result = await session.execute(
+            text("""
+                SELECT id FROM jobs.company_discovery_queue
+                WHERE status = 'pending'
+                ORDER BY created_at ASC
+                LIMIT 50
+            """)
+        )
+        item_ids: list[uuid.UUID] = [row[0] for row in result]
+
+    logger.info("run_discovery_queue: %d pending item(s) to process", len(item_ids))
+
+    counts = {"resolved": 0, "failed": 0, "rejected": 0, "skipped": 0}
+
+    for item_id in item_ids:
+        try:
+            outcome = await _process_discovery_item(item_id, Session, dispatcher)
+            counts[outcome] = counts.get(outcome, 0) + 1
+        except Exception:
+            logger.exception(
+                "run_discovery_queue: unhandled error for queue item %s", item_id
+            )
+            counts["failed"] = counts["failed"] + 1
+
+    logger.info(
+        "run_discovery_queue: done — resolved=%d failed=%d rejected=%d skipped=%d",
+        counts["resolved"], counts["failed"], counts["rejected"], counts["skipped"],
+    )
+    return {"items_processed": len(item_ids), **counts}
+
+
+# ---------------------------------------------------------------------------
+# New Celery tasks — ATS pipeline & discovery queue
+# ---------------------------------------------------------------------------
+
+@celery_app.task(name="app.crawler.tasks.run_crawl_pipeline")
+def run_crawl_pipeline() -> dict[str, Any]:  # type: ignore[override]
+    """Crawl all active + due ATS sources and upsert listings."""
+    return asyncio.run(_async_run_crawl_pipeline())
+
+
+@celery_app.task(name="app.crawler.tasks.run_discovery_queue")
+def run_discovery_queue() -> dict[str, Any]:  # type: ignore[override]
+    """Process pending company discovery queue rows (up to 50 per run)."""
+    return asyncio.run(_async_run_discovery_queue())

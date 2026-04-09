@@ -5,6 +5,14 @@ beat_schedule = {
         "task": "app.crawler.tasks.crawl_all_companies",
         "schedule": crontab(minute=0, hour="*/6"),
     },
+    "run-crawl-pipeline-nightly": {
+        "task": "app.crawler.tasks.run_crawl_pipeline",
+        "schedule": crontab(minute=0, hour=1),
+    },
+    "run-discovery-queue-every-6-hours": {
+        "task": "app.crawler.tasks.run_discovery_queue",
+        "schedule": crontab(minute=0, hour="*/6"),
+    },
     "deactivate-stale-jobs-every-12-hours": {
         "task": "app.crawler.tasks.deactivate_stale_jobs",
         "schedule": crontab(minute=0, hour="*/12"),
