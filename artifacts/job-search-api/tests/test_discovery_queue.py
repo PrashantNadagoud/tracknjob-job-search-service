@@ -338,3 +338,93 @@ class TestProcessDiscoveryItem:
         # Dispatcher must have been called with the probe AtsSource's ID
         assert len(dispatched_ids) == 1
         assert dispatched_ids[0] == probe_ats.id
+
+    @pytest.mark.asyncio
+    async def test_success_with_existing_company_and_ats_merges_probe(self):
+        """When canonical company already has an AtsSource for the same ats_type,
+        probe AtsSource is deleted and the existing one is used (no uq_ats_source violation)."""
+        from app.crawler.tasks import _process_discovery_item
+
+        item = _make_queue_item()
+        probe_company = _make_probe_company()
+        probe_ats = _make_probe_ats(probe_company.id)
+        item_id = item.id
+
+        # Canonical company already exists with an AtsSource for 'workday'
+        canonical_company = MagicMock(spec=Company)
+        canonical_company.id = uuid.uuid4()
+        canonical_company.slug = "acme-corp"
+
+        existing_canonical_ats = MagicMock(spec=AtsSource)
+        existing_canonical_ats.id = uuid.uuid4()
+        existing_canonical_ats.company_id = canonical_company.id
+        existing_canonical_ats.ats_type = "workday"
+        existing_canonical_ats.is_active = False
+
+        dummy_jobs = [{"title": "SWE", "source_url": "http://example.com/1"}]
+        deleted_objects: list = []
+
+        call_count = 0
+
+        def session_factory():
+            nonlocal call_count
+            s = AsyncMock()
+
+            async def _delete(obj):
+                deleted_objects.append(obj)
+
+            s.delete = _delete
+
+            if call_count == 0:
+                # Step 1: item + probe entities
+                execute_result = MagicMock()
+                execute_result.scalar_one_or_none = MagicMock(
+                    side_effect=[probe_company, probe_ats]
+                )
+                s.execute = AsyncMock(return_value=execute_result)
+                s.get = AsyncMock(return_value=item)
+            elif call_count == 1:
+                # dispatch session
+                s.get = AsyncMock(return_value=probe_ats)
+                execute_result = MagicMock()
+                execute_result.scalar_one_or_none = MagicMock(return_value=probe_company)
+                s.execute = AsyncMock(return_value=execute_result)
+            elif call_count == 2:
+                # Success promotion: canonical company exists + canonical AtsSource exists
+                q_item_copy = MagicMock(spec=CompanyDiscoveryQueue)
+                q_item_copy.status = "pending"
+                execute_calls = [
+                    canonical_company,        # real company found by real_slug
+                    existing_canonical_ats,   # existing ats found for real_company_id
+                    probe_company,            # probe company found for deletion
+                ]
+                execute_result = MagicMock()
+                execute_result.scalar_one_or_none = MagicMock(side_effect=execute_calls)
+                s.execute = AsyncMock(return_value=execute_result)
+                s.get = AsyncMock(side_effect=[probe_ats, q_item_copy])
+            else:
+                execute_result = MagicMock()
+                execute_result.scalar_one_or_none = MagicMock(return_value=None)
+                s.execute = AsyncMock(return_value=execute_result)
+                s.get = AsyncMock(return_value=None)
+
+            call_count += 1
+            s.__aenter__ = AsyncMock(return_value=s)
+            s.__aexit__ = AsyncMock(return_value=None)
+            return s
+
+        mock_session_maker = MagicMock(side_effect=session_factory)
+
+        with patch(
+            "app.crawler.dispatcher.CrawlDispatcher",
+            return_value=MagicMock(dispatch=AsyncMock(return_value=dummy_jobs)),
+        ):
+            with patch("app.crawler.tasks._upsert_ats_jobs", new=AsyncMock(return_value=[])):
+                result = await _process_discovery_item(item_id, mock_session_maker)
+
+        assert result == "resolved"
+        # Probe AtsSource was deleted (merged into canonical)
+        deleted_types = [type(d).__name__ for d in deleted_objects]
+        assert "MagicMock" in deleted_types  # probe_ats was deleted
+        # Existing canonical AtsSource was activated (is_active=True)
+        assert existing_canonical_ats.is_active is True

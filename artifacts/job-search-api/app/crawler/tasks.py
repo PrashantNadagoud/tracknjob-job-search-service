@@ -794,11 +794,13 @@ async def _process_discovery_item(
     new_attempt_count = attempt_count + 1
 
     if jobs:
-        # SUCCESS: promote probe entities to permanent, update queue item
+        # SUCCESS: promote probe entities to permanent, update queue item.
+        # Must guard against uq_ats_source(company_id, ats_type) when a real
+        # Company already exists and already has an AtsSource for this ats_type.
         async with Session() as session:
             real_slug = _slugify(company_name)
 
-            # Check if a real Company with this slug already exists
+            # Check if a canonical Company with this slug already exists
             real_company: Company | None = (
                 await session.execute(
                     select(Company).where(Company.slug == real_slug)
@@ -806,27 +808,53 @@ async def _process_discovery_item(
             ).scalar_one_or_none()
 
             if real_company is None:
-                # Rename probe Company to the real slug (in-place promotion)
+                # No canonical company: rename probe Company → real slug (in-place)
                 p_company = await session.get(Company, probe_company_id)
                 if p_company:
                     p_company.slug = real_slug
                 real_company_id: uuid.UUID = probe_company_id
-            else:
-                # Real Company exists: move AtsSource to it, then delete probe Company
-                real_company_id = real_company.id
+                # Activate probe AtsSource for the renamed company
                 p_ats = await session.get(AtsSource, probe_ats_id)
                 if p_ats:
-                    p_ats.company_id = real_company_id
-                # Delete probe Company (AtsSource already reassigned)
-                p_company = await session.get(Company, probe_company_id)
+                    p_ats.is_active = True
+                active_ats_id: uuid.UUID = probe_ats_id
+            else:
+                # Canonical company exists: check for existing AtsSource constraint
+                real_company_id = real_company.id
+                existing_ats: AtsSource | None = (
+                    await session.execute(
+                        select(AtsSource).where(
+                            AtsSource.company_id == real_company_id,
+                            AtsSource.ats_type == ats_type,
+                        )
+                    )
+                ).scalar_one_or_none()
+
+                if existing_ats is None:
+                    # No conflict: reassign probe AtsSource to canonical company
+                    p_ats = await session.get(AtsSource, probe_ats_id)
+                    if p_ats:
+                        p_ats.company_id = real_company_id
+                        p_ats.is_active = True
+                    active_ats_id = probe_ats_id
+                else:
+                    # Conflict: canonical company already has (company_id, ats_type)
+                    # Merge: delete probe AtsSource, use the existing one
+                    p_ats = await session.get(AtsSource, probe_ats_id)
+                    if p_ats:
+                        await session.delete(p_ats)
+                    # Activate existing AtsSource if it was dormant
+                    existing_ats.is_active = True
+                    active_ats_id = existing_ats.id
+
+                # Delete probe Company — canonical company takes ownership
+                p_company = (
+                    await session.execute(
+                        select(Company).where(Company.slug == probe_slug)
+                    )
+                ).scalar_one_or_none()
                 if p_company:
                     await session.delete(p_company)
-
-            # Activate the AtsSource (makes it visible to run_crawl_pipeline)
-            p_ats = await session.get(AtsSource, probe_ats_id)
-            if p_ats:
-                p_ats.is_active = True
-                p_ats.company_id = real_company_id
 
             # Update queue item
             q_item = await session.get(CompanyDiscoveryQueue, item_id)
@@ -842,7 +870,7 @@ async def _process_discovery_item(
         for job in jobs:
             job.setdefault("company", company_name)
             job["company_id"] = real_company_id
-            job["ats_source_id"] = probe_ats_id
+            job["ats_source_id"] = active_ats_id
             job["ats_type"] = ats_type
             job.setdefault("country", market)
 
@@ -930,6 +958,21 @@ async def _async_run_discovery_queue() -> dict[str, Any]:
                 "run_discovery_queue: unhandled error for queue item %s", item_id
             )
             counts["failed"] += 1
+            # Increment attempt_count even on unexpected exceptions so the item
+            # can eventually reach rejection rather than staying pending forever.
+            try:
+                async with Session() as s:
+                    q_item = await s.get(CompanyDiscoveryQueue, item_id)
+                    if q_item and q_item.status == "pending":
+                        q_item.attempt_count = (q_item.attempt_count or 0) + 1
+                        if q_item.attempt_count >= 3:
+                            q_item.status = "rejected"
+                            q_item.error_message = "Unexpected error during probe"
+                        await s.commit()
+            except Exception:
+                logger.exception(
+                    "run_discovery_queue: failed to update attempt_count for item %s", item_id
+                )
 
     logger.info(
         "run_discovery_queue: done — resolved=%d failed=%d rejected=%d skipped=%d",
