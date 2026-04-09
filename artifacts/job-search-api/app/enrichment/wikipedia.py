@@ -35,17 +35,25 @@ class WikipediaResult:
 
 
 def _count_to_range(count: int) -> str:
-    if count < 50:
-        return "1-49"
-    if count < 200:
-        return "50-199"
-    if count < 500:
-        return "200-499"
-    if count < 1_000:
-        return "500-999"
+    """Map a raw employee count to the canonical num_employees_range string.
+
+    The returned values match the validation allow-list in enricher.py.
+    """
+    if count < 11:
+        return "1-10"
+    if count < 51:
+        return "11-50"
+    if count < 201:
+        return "51-200"
+    if count < 501:
+        return "201-500"
+    if count < 1_001:
+        return "501-1000"
     if count < 5_001:
         return "1001-5000"
-    return "5001+"
+    if count < 10_001:
+        return "5001-10000"
+    return "10001+"
 
 
 def _parse_wikitext_infobox(wikitext: str, result: WikipediaResult) -> None:

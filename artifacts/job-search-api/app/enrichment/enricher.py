@@ -12,6 +12,11 @@ Yahoo Finance runs sequentially AFTER the gather if a stock_ticker was found.
 Funding fields (funding_total_usd, last_funding_type, last_funding_date) are
 always null — no free source populates them. The DB columns are preserved for
 schema compatibility.
+
+Data-integrity guardrails (added in Session 16):
+  G1 — enriched_at is only set when at least one source returned real data.
+  G2 — _apply_validated() enforces field-level bounds before writing.
+  G3 — Enrichment is additive-only: null/empty/existing values are never overwritten.
 """
 
 import asyncio
@@ -36,6 +41,12 @@ _RATE_LIMITS = {
     "builtin": 1.0,
     "glassdoor": 1.5,
 }
+
+# Canonical num_employees_range values accepted by _apply_validated (G2).
+_VALID_EMPLOYEE_RANGES: frozenset[str] = frozenset({
+    "1-10", "11-50", "51-200", "201-500", "501-1000",
+    "1001-5000", "5001-10000", "10001+",
+})
 
 
 def generate_slugs(company_name: str) -> dict[str, str]:
@@ -96,6 +107,98 @@ class CompanyRecord:
 
 
 class CompanyEnricher:
+    def _apply_validated(self, record: CompanyRecord, data: dict) -> None:
+        """Validate and apply a dict of enrichment fields to a CompanyRecord,
+        skipping invalid or empty values.
+
+        Guardrail 2 — field-specific bounds checking:
+          funding_total_usd  : float, > 0 and < 1 000 000 000 000
+          culture_score      : parseable as float, 0.0–5.0
+          ceo_approval_pct   : parseable as int, 0–100
+          work_life_score    : parseable as float, 0.0–5.0 (stored as Decimal)
+          founded_year       : parseable as int, 1800–current year
+          num_employees_range: must be one of _VALID_EMPLOYEE_RANGES
+          salary_min_usd /
+          salary_max_usd     : float, > 0 and < 10 000 000
+          all other fields   : accepted if non-None and non-empty string
+
+        Guardrail 3 — additive-only writes:
+          • Incoming None / "" / [] are silently skipped.
+          • Fields already populated on *record* are not overwritten
+            (treats "unknown" and [] as "not yet set" sentinels).
+
+        Validation failures are logged at DEBUG with the field name, value,
+        and company slug.
+        """
+        current_year = datetime.now(timezone.utc).year
+
+        for fld, value in data.items():
+            # G3: skip empty/null incoming values
+            if value is None or value == "" or value == []:
+                continue
+
+            # G3: additive-only — skip if record field is already populated
+            # Treat "unknown" (company_type sentinel) and [] as "not yet set"
+            existing = getattr(record, fld, None)
+            if existing is not None and existing != "unknown" and existing != []:
+                continue
+
+            # G2: field-specific validation
+            valid = True
+            try:
+                if fld == "funding_total_usd":
+                    v = float(value)
+                    if not (0 < v < 1_000_000_000_000):
+                        raise ValueError
+                    value = int(v)
+
+                elif fld == "culture_score":
+                    v = float(value)          # rejects letter grades like "A+"
+                    if not (0.0 <= v <= 5.0):
+                        raise ValueError
+
+                elif fld == "ceo_approval_pct":
+                    v = int(value)
+                    if not (0 <= v <= 100):
+                        raise ValueError
+                    value = v
+
+                elif fld == "work_life_score":
+                    v = float(value)
+                    if not (0.0 <= v <= 5.0):
+                        raise ValueError
+                    value = Decimal(str(round(v, 2)))
+
+                elif fld == "founded_year":
+                    v = int(value)
+                    if not (1800 <= v <= current_year):
+                        raise ValueError
+                    value = v
+
+                elif fld == "num_employees_range":
+                    if value not in _VALID_EMPLOYEE_RANGES:
+                        raise ValueError
+
+                elif fld in ("salary_min_usd", "salary_max_usd"):
+                    v = float(value)
+                    if not (0 < v < 10_000_000):
+                        raise ValueError
+                    value = int(v)
+
+                # All other fields pass if non-None and non-empty (checked above)
+
+            except (ValueError, TypeError):
+                valid = False
+
+            if not valid:
+                logger.debug(
+                    "Enricher validation rejected field '%s' value '%s' for company %s",
+                    fld, value, record.slug,
+                )
+                continue
+
+            setattr(record, fld, value)
+
     async def enrich(
         self,
         company_slug: str,
@@ -127,44 +230,52 @@ class CompanyEnricher:
 
         # ── Merge: Wikipedia first, then LinkedIn fills gaps ──────────────────
         if not isinstance(wiki_res, Exception):
-            record.num_employees_range = wiki_res.num_employees_range
-            record.founded_year = wiki_res.founded_year
-            record.company_type = wiki_res.company_type
-            record.stock_ticker = wiki_res.stock_ticker
-            record.stock_exchange = wiki_res.stock_exchange
+            self._apply_validated(record, {
+                "num_employees_range": wiki_res.num_employees_range,
+                "founded_year": wiki_res.founded_year,
+                # Pass None instead of "unknown" so additive-only skips it cleanly
+                "company_type": wiki_res.company_type if wiki_res.company_type != "unknown" else None,
+                "stock_ticker": wiki_res.stock_ticker,
+                "stock_exchange": wiki_res.stock_exchange,
+            })
             record.enrichment_source.extend(wiki_res.sources)
         else:
             logger.warning("Wikipedia enrichment exception: %s", wiki_res)
 
         if not isinstance(li_res, Exception):
-            if record.num_employees_range is None:
-                record.num_employees_range = li_res.num_employees_range
-            if record.founded_year is None:
-                record.founded_year = li_res.founded_year
+            self._apply_validated(record, {
+                "num_employees_range": li_res.num_employees_range,
+                "founded_year": li_res.founded_year,
+            })
             record.enrichment_source.extend(li_res.sources)
         else:
             logger.warning("LinkedIn enrichment exception: %s", li_res)
 
         if not isinstance(comp_res, Exception):
-            record.culture_score = comp_res.culture_score
-            record.ceo_approval_pct = comp_res.ceo_approval_pct
-            if comp_res.work_life_score is not None:
-                record.work_life_score = Decimal(str(comp_res.work_life_score))
+            self._apply_validated(record, {
+                "culture_score": comp_res.culture_score,
+                "ceo_approval_pct": comp_res.ceo_approval_pct,
+                "work_life_score": comp_res.work_life_score,
+            })
             record.enrichment_source.extend(comp_res.sources)
         else:
             logger.warning("Comparably enrichment exception: %s", comp_res)
 
         if not isinstance(bi_res, Exception):
-            record.remote_policy = bi_res.remote_policy
-            record.perks = bi_res.perks or None
+            self._apply_validated(record, {
+                "remote_policy": bi_res.remote_policy,
+                "perks": bi_res.perks,
+            })
             record.enrichment_source.extend(bi_res.sources)
         else:
             logger.warning("BuiltIn enrichment exception: %s", bi_res)
 
         if not isinstance(gd_res, Exception):
-            record.salary_min_usd = gd_res.salary_min_usd
-            record.salary_max_usd = gd_res.salary_max_usd
-            record.salary_source = gd_res.salary_source
+            self._apply_validated(record, {
+                "salary_min_usd": gd_res.salary_min_usd,
+                "salary_max_usd": gd_res.salary_max_usd,
+                "salary_source": gd_res.salary_source,
+            })
             record.enrichment_source.extend(gd_res.sources)
         else:
             logger.warning("Glassdoor enrichment exception: %s", gd_res)
@@ -176,10 +287,10 @@ class CompanyEnricher:
                 from app.enrichment.wikipedia import WikipediaResult
                 yf_proxy = WikipediaResult(stock_ticker=record.stock_ticker)
                 await _enrich_from_yahoo_finance(yf_proxy)
-                if yf_proxy.stock_exchange:
-                    record.stock_exchange = yf_proxy.stock_exchange
-                if yf_proxy.stock_ticker:
-                    record.stock_ticker = yf_proxy.stock_ticker
+                self._apply_validated(record, {
+                    "stock_exchange": yf_proxy.stock_exchange,
+                    "stock_ticker": yf_proxy.stock_ticker,
+                })
                 for src in yf_proxy.sources:
                     if src not in record.enrichment_source:
                         record.enrichment_source.append(src)
@@ -191,5 +302,10 @@ class CompanyEnricher:
         record.last_funding_type = None
         record.last_funding_date = None
 
-        record.enriched_at = datetime.now(timezone.utc)
+        # ── Guardrail 1: only timestamp when at least one source produced data ─
+        if record.enrichment_source:
+            record.enriched_at = datetime.now(timezone.utc)
+        else:
+            logger.warning("Enrichment returned no data for company: %s", record.slug)
+
         return record

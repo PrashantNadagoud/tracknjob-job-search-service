@@ -246,7 +246,7 @@ async def test_private_company_has_null_funding_fields():
 
 @pytest.mark.asyncio
 async def test_all_sources_fail_returns_partial_record():
-    """AT-3: enrich() returns CompanyRecord with enriched_at set; never raises."""
+    """AT-3: enrich() returns CompanyRecord; Guardrail 1 keeps enriched_at None when all sources fail."""
     enricher = CompanyEnricher()
 
     err = ConnectionError("network down")
@@ -277,8 +277,10 @@ async def test_all_sources_fail_returns_partial_record():
         record = await enricher.enrich("test-fail-co", "FailCo", "Engineer", "Remote")
 
     assert record is not None
-    assert record.enriched_at is not None
-    assert isinstance(record.enriched_at, datetime)
+    # Guardrail 1: enriched_at stays None when enrichment_source is empty
+    assert record.enriched_at is None, (
+        "Guardrail 1 violation: enriched_at should be None when all sources fail"
+    )
     assert record.enrichment_source == []
 
 
