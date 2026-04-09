@@ -1,14 +1,12 @@
 from celery.schedules import crontab
 
 beat_schedule = {
-    "crawl-all-companies-every-6-hours": {
-        "task": "app.crawler.tasks.crawl_all_companies",
-        "schedule": crontab(minute=0, hour="*/6"),
-    },
+    # ATS-driven pipeline — primary nightly crawl (replaces crawl_all_companies schedule)
     "run-crawl-pipeline-nightly": {
         "task": "app.crawler.tasks.run_crawl_pipeline",
         "schedule": crontab(minute=0, hour=1),
     },
+    # Discovery queue — probe new company candidates every 6 hours
     "run-discovery-queue-every-6-hours": {
         "task": "app.crawler.tasks.run_discovery_queue",
         "schedule": crontab(minute=0, hour="*/6"),
@@ -30,4 +28,9 @@ beat_schedule = {
         "schedule": crontab(minute=0, hour=3, day_of_week="sunday"),
     },
 }
+
+# Note: crawl_all_companies is retained as a fallback / manually-triggered task
+# but is no longer part of the beat schedule. Trigger it manually when needed:
+#   celery -A app.celery_app call app.crawler.tasks.crawl_all_companies
+
 timezone = "UTC"

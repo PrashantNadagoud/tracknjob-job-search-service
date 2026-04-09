@@ -98,8 +98,12 @@ async def _upsert_jobs(jobs: list[dict[str, Any]]) -> list[str]:
     - NEW, duplicate found via pg_trgm       → bump last_seen_at on match, skip insert
     - NEW, no duplicate                      → INSERT with last_seen_at=NOW()
 
+    Also populates ``title_normalized`` and ``seniority_level`` on every path.
+
     Returns list of newly inserted job UUIDs (for summarization queue).
     """
+    from app.utils.title_normalizer import extract_seniority, normalize_title
+
     Session = _make_session()
     new_ids: list[str] = []
     now = datetime.now(timezone.utc)
@@ -110,6 +114,10 @@ async def _upsert_jobs(jobs: list[dict[str, Any]]) -> list[str]:
             if not source_url:
                 continue
 
+            raw_title: str = job.get("title") or ""
+            title_normalized = normalize_title(raw_title) or raw_title
+            seniority_level = extract_seniority(title_normalized)
+
             existing = (
                 await session.execute(
                     select(Listing).where(Listing.source_url == source_url)
@@ -119,6 +127,8 @@ async def _upsert_jobs(jobs: list[dict[str, Any]]) -> list[str]:
             if existing is not None:
                 # Job already known by this exact URL
                 existing.last_seen_at = now
+                existing.title_normalized = title_normalized
+                existing.seniority_level = seniority_level
                 if not existing.is_active:
                     existing.is_active = True
                     logger.info(
@@ -151,7 +161,12 @@ async def _upsert_jobs(jobs: list[dict[str, Any]]) -> list[str]:
                     )
                 else:
                     # Truly new job — insert
-                    listing = Listing(**sanitized, last_seen_at=now)
+                    listing = Listing(
+                        **sanitized,
+                        last_seen_at=now,
+                        title_normalized=title_normalized,
+                        seniority_level=seniority_level,
+                    )
                     session.add(listing)
                     await session.flush()
                     new_ids.append(str(listing.id))
@@ -687,103 +702,147 @@ async def _async_run_crawl_pipeline() -> dict[str, Any]:
 async def _process_discovery_item(
     item_id: uuid.UUID,
     Session: async_sessionmaker[AsyncSession],
-    dispatcher: "CrawlDispatcher",  # type: ignore[name-defined]
 ) -> str:
-    """Probe a single CompanyDiscoveryQueue item via CrawlDispatcher.
+    """Probe a single CompanyDiscoveryQueue item.
+
+    Probing uses the real crawler via CRAWLER_MAP so no temporary DB rows are
+    created.  Company + AtsSource rows are committed ONLY on a successful probe.
 
     Returns one of: 'resolved', 'failed', 'rejected', 'skipped'.
     """
-    # Step 1: Read item details and ensure Company + AtsSource rows exist
+    from app.crawler.dispatcher import CRAWLER_MAP
+
+    # Step 1: Read item details
     async with Session() as session:
         item = await session.get(CompanyDiscoveryQueue, item_id)
         if item is None or item.status != "pending":
             return "skipped"
 
+        company_name: str = item.company_name
+        website: str | None = item.website
         ats_type: str = item.suspected_ats or "workday"
-        company_slug = _slugify(item.company_name) + "-discovery"
+        suspected_slug: str | None = item.suspected_slug
+        market: str = item.market
+        source: str = item.source
+        attempt_count: int = item.attempt_count or 0
 
-        # Get or create Company
-        company: Company | None = (
-            await session.execute(
-                select(Company).where(Company.slug == company_slug)
+    # Step 2: Probe using the real crawler (no DB rows created yet)
+    crawler = CRAWLER_MAP.get(ats_type)
+    jobs: list[dict[str, Any]] = []
+    if crawler is None:
+        logger.warning(
+            "run_discovery_queue: unknown ats_type=%s for item %s — will reject",
+            ats_type, item_id,
+        )
+    else:
+        try:
+            jobs = await crawler.crawl(suspected_slug or "", uuid.uuid4())
+        except Exception:
+            logger.exception(
+                "run_discovery_queue: probe failed for item %s ats_type=%s slug=%s",
+                item_id, ats_type, suspected_slug,
             )
-        ).scalar_one_or_none()
 
-        if company is None:
-            company = Company(
-                slug=company_slug,
-                name=item.company_name,
-                website=item.website,
-                primary_ats_type=ats_type,
-            )
-            session.add(company)
-            await session.flush()
-
-        company_id: uuid.UUID = company.id
-
-        # Get or create AtsSource
-        ats_source: AtsSource | None = (
-            await session.execute(
-                select(AtsSource).where(
-                    AtsSource.company_id == company_id,
-                    AtsSource.ats_type == ats_type,
-                )
-            )
-        ).scalar_one_or_none()
-
-        if ats_source is None:
-            ats_source = AtsSource(
-                company_id=company_id,
-                ats_type=ats_type,
-                ats_slug=item.suspected_slug,
-                market=item.market,
-                discovery_source=item.source,
-            )
-            session.add(ats_source)
-            await session.flush()
-
-        ats_source_id: uuid.UUID = ats_source.id
-        await session.commit()
-
-    # Step 2: Probe via dispatcher (dispatch uses its own session internally)
-    async with Session() as session:
-        jobs = await dispatcher.dispatch(ats_source_id, session)
-
-    # Step 3: Update discovery queue item based on result
     now = datetime.now(timezone.utc)
+    new_attempt_count = attempt_count + 1
+
+    if jobs:
+        # SUCCESS: persist Company + AtsSource, then update queue item
+        async with Session() as session:
+            real_slug = _slugify(company_name)
+            company: Company | None = (
+                await session.execute(
+                    select(Company).where(Company.slug == real_slug)
+                )
+            ).scalar_one_or_none()
+
+            if company is None:
+                company = Company(
+                    slug=real_slug,
+                    name=company_name,
+                    website=website,
+                    primary_ats_type=ats_type,
+                )
+                session.add(company)
+                await session.flush()
+
+            company_id: uuid.UUID = company.id
+
+            ats_source: AtsSource | None = (
+                await session.execute(
+                    select(AtsSource).where(
+                        AtsSource.company_id == company_id,
+                        AtsSource.ats_type == ats_type,
+                    )
+                )
+            ).scalar_one_or_none()
+
+            if ats_source is None:
+                ats_source = AtsSource(
+                    company_id=company_id,
+                    ats_type=ats_type,
+                    ats_slug=suspected_slug,
+                    market=market,
+                    discovery_source=source,
+                    last_crawled_at=now,
+                    last_crawl_status="ok",
+                    last_crawl_job_count=len(jobs),
+                )
+                session.add(ats_source)
+                await session.flush()
+
+            ats_source_id: uuid.UUID = ats_source.id
+
+            q_item = await session.get(CompanyDiscoveryQueue, item_id)
+            if q_item:
+                q_item.status = "resolved"
+                q_item.resolved_company_id = company_id
+                q_item.last_attempted_at = now
+                q_item.attempt_count = new_attempt_count
+
+            await session.commit()
+
+        # Inject company context into job dicts and upsert
+        for job in jobs:
+            job.setdefault("company", company_name)
+            job["company_id"] = company_id
+            job["ats_source_id"] = ats_source_id
+            job["ats_type"] = ats_type
+            job.setdefault("country", market)
+
+        await _upsert_ats_jobs(jobs, Session)
+
+        logger.info(
+            "run_discovery_queue: resolved company=%s ats_type=%s jobs=%d",
+            company_name, ats_type, len(jobs),
+        )
+        return "resolved"
+
+    # FAILURE path — no DB entities created
     async with Session() as session:
-        item = await session.get(CompanyDiscoveryQueue, item_id)
-        if item is None:
+        q_item = await session.get(CompanyDiscoveryQueue, item_id)
+        if q_item is None:
             return "skipped"
 
-        item.last_attempted_at = now
-        item.attempt_count = (item.attempt_count or 0) + 1
+        q_item.last_attempted_at = now
+        q_item.attempt_count = new_attempt_count
 
-        if jobs:
-            item.status = "resolved"
-            item.resolved_company_id = company_id
-            await session.commit()
-            logger.info(
-                "run_discovery_queue: resolved company=%s ats_type=%s jobs=%d",
-                item.company_name, ats_type, len(jobs),
+        if new_attempt_count >= 3:
+            q_item.status = "rejected"
+            q_item.error_message = (
+                f"Exhausted {new_attempt_count} probe attempts for ats_type={ats_type!r}"
             )
-            return "resolved"
-
-        # Probe returned no jobs
-        if item.attempt_count >= 3:
-            item.status = "rejected"
-            item.error_message = f"Exhausted {item.attempt_count} probe attempts with no results"
             await session.commit()
             logger.info(
                 "run_discovery_queue: rejected company=%s ats_type=%s after %d attempt(s)",
-                item.company_name, ats_type, item.attempt_count,
+                company_name, ats_type, new_attempt_count,
             )
             return "rejected"
 
         await session.commit()
         logger.info(
             "run_discovery_queue: attempt %d/3 failed for company=%s ats_type=%s",
-            item.attempt_count, item.company_name, ats_type,
+            new_attempt_count, company_name, ats_type,
         )
         return "failed"
 
@@ -791,16 +850,12 @@ async def _process_discovery_item(
 async def _async_run_discovery_queue() -> dict[str, Any]:
     """Process up to 50 pending rows from company_discovery_queue.
 
-    For each row:
-    - Creates a temporary Company + AtsSource if they don't exist.
-    - Probes via CrawlDispatcher.dispatch().
-    - On success: sets status='resolved', resolved_company_id.
-    - On failure: increments attempt_count; sets status='rejected' at >= 3 attempts.
+    Probes each candidate using the real crawler (via CRAWLER_MAP).
+    Company + AtsSource rows are created ONLY on a successful probe.
+    On failure: increments attempt_count; rejects at >= 3 attempts.
+    No temporary DB entities are created for failed probes.
     """
-    from app.crawler.dispatcher import CrawlDispatcher
-
     Session = _make_session()
-    dispatcher = CrawlDispatcher()
 
     async with Session() as session:
         result = await session.execute(
@@ -815,17 +870,17 @@ async def _async_run_discovery_queue() -> dict[str, Any]:
 
     logger.info("run_discovery_queue: %d pending item(s) to process", len(item_ids))
 
-    counts = {"resolved": 0, "failed": 0, "rejected": 0, "skipped": 0}
+    counts: dict[str, int] = {"resolved": 0, "failed": 0, "rejected": 0, "skipped": 0}
 
     for item_id in item_ids:
         try:
-            outcome = await _process_discovery_item(item_id, Session, dispatcher)
+            outcome = await _process_discovery_item(item_id, Session)
             counts[outcome] = counts.get(outcome, 0) + 1
         except Exception:
             logger.exception(
                 "run_discovery_queue: unhandled error for queue item %s", item_id
             )
-            counts["failed"] = counts["failed"] + 1
+            counts["failed"] += 1
 
     logger.info(
         "run_discovery_queue: done — resolved=%d failed=%d rejected=%d skipped=%d",
