@@ -20,7 +20,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -59,63 +58,10 @@ def parse_args() -> argparse.Namespace:
 async def run(market: str, dry_run: bool, limit: int | None) -> None:
     from app.db import AsyncSessionFactory
     from app.discovery.seed_orchestrator import SeedOrchestrator
-    from app.discovery.yc_scraper import YCScraper
 
-    if limit is not None:
-        scraper = YCScraper()
-        companies = await scraper.fetch()
-        companies = companies[:limit]
-
-        async with AsyncSessionFactory() as session:
-            orchestrator = SeedOrchestrator(db_session=session, batch_size=50)
-            existing = await orchestrator._fetch_existing_websites()
-            candidates = [
-                c for c in companies
-                if c.get("website") and c["website"] not in existing
-            ]
-
-            logger.info(
-                "--limit %d applied: %d companies after dedup",
-                limit,
-                len(candidates),
-            )
-
-            from app.discovery.ats_prober import ATSProber
-            import asyncio as _asyncio
-
-            prober = ATSProber()
-            counts = {
-                "total": len(companies),
-                "skipped": len(companies) - len(candidates),
-                "probed": 0,
-                "matched": 0,
-                "rejected": 0,
-            }
-
-            for idx, company in enumerate(candidates):
-                counts["probed"] += 1
-                match = await prober.probe(company)
-                if match:
-                    counts["matched"] += 1
-                    if not dry_run:
-                        await orchestrator._insert_matched(company, match, market)
-                else:
-                    counts["rejected"] += 1
-                    if not dry_run:
-                        await orchestrator._insert_rejected(company, market)
-
-                if (idx + 1) % 50 == 0:
-                    logger.info("Progress: %d / %d", idx + 1, len(candidates))
-
-                if not dry_run and (idx + 1) % 50 == 0:
-                    await session.commit()
-
-            if not dry_run:
-                await session.commit()
-    else:
-        async with AsyncSessionFactory() as session:
-            orchestrator = SeedOrchestrator(db_session=session, batch_size=50)
-            counts = await orchestrator.run(market=market, dry_run=dry_run)
+    async with AsyncSessionFactory() as session:
+        orchestrator = SeedOrchestrator(db_session=session, batch_size=50)
+        counts = await orchestrator.run(market=market, dry_run=dry_run, limit=limit)
 
     print()
     print("=" * 50)
@@ -123,6 +69,8 @@ async def run(market: str, dry_run: bool, limit: int | None) -> None:
     print("=" * 50)
     print(f"  market   : {market}")
     print(f"  dry_run  : {dry_run}")
+    if limit is not None:
+        print(f"  limit    : {limit}")
     print(f"  total    : {counts['total']}")
     print(f"  skipped  : {counts['skipped']}  (already known)")
     print(f"  probed   : {counts['probed']}")

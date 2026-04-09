@@ -49,7 +49,7 @@ class SeedOrchestrator:
         self._batch_size = batch_size
 
     async def run(
-        self, market: str = "US", dry_run: bool = False
+        self, market: str = "US", dry_run: bool = False, limit: int | None = None
     ) -> dict[str, int]:
         """Execute the full seed pipeline.
 
@@ -68,6 +68,11 @@ class SeedOrchestrator:
 
         scraper = YCScraper()
         companies = await scraper.fetch()
+
+        if limit is not None:
+            companies = companies[:limit]
+            logger.info("--limit %d applied; working with %d companies", limit, len(companies))
+
         counts["total"] = len(companies)
         logger.info("Fetched %d companies from YC", counts["total"])
 
