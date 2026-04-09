@@ -19,9 +19,12 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.crawler.ats.ashby import AshbyCrawler
 from app.crawler.ats.bamboohr import BambooHRCrawler
 from app.crawler.ats.foundit import FounditCrawler
+from app.crawler.ats.greenhouse import GreenhouseCrawler
 from app.crawler.ats.jazzhr import JazzHRCrawler
+from app.crawler.ats.lever import LeverCrawler
 from app.crawler.ats.naukri import NaukriCrawler
 from app.crawler.ats.rippling import RipplingCrawler
 from app.crawler.ats.smartrecruiters import SmartRecruitersCrawler
@@ -33,6 +36,9 @@ from app.models import AtsSource, Company, CrawlDeadLetter
 logger = logging.getLogger(__name__)
 
 CRAWLER_MAP: dict[str, BaseATSCrawler] = {
+    "greenhouse": GreenhouseCrawler(),
+    "lever": LeverCrawler(),
+    "ashby": AshbyCrawler(),
     "workday": WorkdayCrawler(),
     "smartrecruiters": SmartRecruitersCrawler(),
     "bamboohr": BambooHRCrawler(),

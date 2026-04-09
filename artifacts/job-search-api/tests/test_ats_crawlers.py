@@ -19,7 +19,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.crawler.ats.ashby import AshbyCrawler
 from app.crawler.ats.bamboohr import BambooHRCrawler
+from app.crawler.ats.greenhouse import GreenhouseCrawler
+from app.crawler.ats.lever import LeverCrawler
 from app.crawler.ats.workday import WorkdayCrawler
 from app.crawler.dispatcher import CrawlDispatcher, _RATE_LIMIT_BACKOFF, _backoff_for
 from app.crawler.exceptions import CrawlException, RateLimitedException, SlugNotFoundException
@@ -568,3 +571,246 @@ class TestBackoffHelper:
 
     def test_rate_limit_backoff_is_30_min(self):
         assert _RATE_LIMIT_BACKOFF == timedelta(minutes=30)
+
+
+# ── GreenhouseCrawler ─────────────────────────────────────────────────────────
+
+class TestGreenhouseCrawler:
+    @pytest.mark.asyncio
+    async def test_maps_jobs_correctly(self):
+        crawler = GreenhouseCrawler()
+        ats_source_id = uuid.uuid4()
+
+        mock_response = {
+            "jobs": [
+                {
+                    "id": 11111,
+                    "title": "Backend Engineer",
+                    "location": {"name": "New York, NY"},
+                    "departments": [{"name": "Engineering"}],
+                    "updated_at": "2024-03-01T10:00:00.000Z",
+                    "absolute_url": "https://boards.greenhouse.io/acme/jobs/11111",
+                }
+            ],
+            "meta": {"total": 1},
+        }
+
+        crawler._get_json = AsyncMock(return_value=mock_response)
+        jobs = await crawler.crawl("acme", ats_source_id)
+
+        assert len(jobs) == 1
+        j = jobs[0]
+        assert j["title"] == "Backend Engineer"
+        assert j["location"] == "New York, NY"
+        assert j["external_job_id"] == "11111"
+        assert j["department"] == "Engineering"
+        assert j["ats_type"] == "greenhouse"
+        assert j["ats_source_id"] == ats_source_id
+        assert j["source_url"] == "https://boards.greenhouse.io/acme/jobs/11111"
+        assert j["geo_restriction"] is not None
+
+    @pytest.mark.asyncio
+    async def test_empty_jobs_returns_empty_list(self):
+        crawler = GreenhouseCrawler()
+        crawler._get_json = AsyncMock(return_value={"jobs": [], "meta": {"total": 0}})
+        jobs = await crawler.crawl("nobody", uuid.uuid4())
+        assert jobs == []
+
+    @pytest.mark.asyncio
+    async def test_remote_location_sets_remote_flag(self):
+        crawler = GreenhouseCrawler()
+        ats_source_id = uuid.uuid4()
+        mock_response = {
+            "jobs": [
+                {
+                    "id": 22222,
+                    "title": "Remote SRE",
+                    "location": {"name": "Remote"},
+                    "departments": [],
+                    "updated_at": None,
+                    "absolute_url": "https://boards.greenhouse.io/acme/jobs/22222",
+                }
+            ]
+        }
+        crawler._get_json = AsyncMock(return_value=mock_response)
+        jobs = await crawler.crawl("acme", ats_source_id)
+        assert jobs[0]["remote"] is True
+
+
+# ── LeverCrawler ──────────────────────────────────────────────────────────────
+
+class TestLeverCrawler:
+    @pytest.mark.asyncio
+    async def test_maps_postings_correctly(self):
+        crawler = LeverCrawler()
+        ats_source_id = uuid.uuid4()
+
+        page1 = [
+            {
+                "id": "abc-123",
+                "text": "Staff Engineer",
+                "categories": {
+                    "location": "San Francisco, CA",
+                    "department": "Engineering",
+                    "team": "Platform",
+                },
+                "hostedUrl": "https://jobs.lever.co/startup/abc-123",
+                "createdAt": 1704067200000,
+            }
+        ]
+
+        crawler._get_json = AsyncMock(return_value=page1)
+        jobs = await crawler.crawl("startup", ats_source_id)
+
+        assert len(jobs) == 1
+        j = jobs[0]
+        assert j["title"] == "Staff Engineer"
+        assert j["location"] == "San Francisco, CA"
+        assert j["external_job_id"] == "abc-123"
+        assert j["department"] == "Engineering"
+        assert j["ats_type"] == "lever"
+        assert j["ats_source_id"] == ats_source_id
+        assert j["source_url"] == "https://jobs.lever.co/startup/abc-123"
+        assert isinstance(j["posted_at"], datetime)
+
+    @pytest.mark.asyncio
+    async def test_pagination_stops_when_page_is_underfull(self):
+        """When a page returns fewer items than PAGE_SIZE, no second request is made."""
+        from app.crawler.ats.lever import _PAGE_SIZE
+
+        crawler = LeverCrawler()
+        call_count = 0
+
+        async def _fake_get(url, params=None, extra_headers=None):
+            nonlocal call_count
+            call_count += 1
+            # Return 1 item (< PAGE_SIZE=100) — crawler should not make a second call
+            return [{"id": f"x{call_count}", "text": "Eng", "categories": {}, "hostedUrl": f"http://h/x{call_count}", "createdAt": None}]
+
+        crawler._get_json = _fake_get
+        jobs = await crawler.crawl("co", uuid.uuid4())
+        assert len(jobs) == 1
+        assert call_count == 1, "Underfull first page should stop pagination after one call"
+
+    @pytest.mark.asyncio
+    async def test_pagination_fetches_second_page_on_full_first_page(self):
+        """When a page returns exactly PAGE_SIZE items, a second request is made."""
+        from app.crawler.ats.lever import _PAGE_SIZE
+
+        crawler = LeverCrawler()
+        call_count = 0
+
+        def _make_posting(i: int) -> dict:
+            return {"id": f"id-{i}", "text": "Eng", "categories": {}, "hostedUrl": f"http://h/{i}", "createdAt": None}
+
+        async def _fake_get(url, params=None, extra_headers=None):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [_make_posting(i) for i in range(_PAGE_SIZE)]  # full page
+            return []  # empty second page
+
+        crawler._get_json = _fake_get
+        jobs = await crawler.crawl("co", uuid.uuid4())
+        assert len(jobs) == _PAGE_SIZE
+        assert call_count == 2, "Full first page should trigger a second request"
+
+    @pytest.mark.asyncio
+    async def test_empty_postings_returns_empty_list(self):
+        crawler = LeverCrawler()
+        crawler._get_json = AsyncMock(return_value=[])
+        jobs = await crawler.crawl("nobody", uuid.uuid4())
+        assert jobs == []
+
+
+# ── AshbyCrawler ──────────────────────────────────────────────────────────────
+
+class TestAshbyCrawler:
+    @pytest.mark.asyncio
+    async def test_maps_postings_correctly(self):
+        crawler = AshbyCrawler()
+        ats_source_id = uuid.uuid4()
+
+        mock_response = {
+            "jobPostings": [
+                {
+                    "id": "uuid-456",
+                    "title": "Product Designer",
+                    "department": "Design",
+                    "location": "Austin, TX",
+                    "employmentType": "FullTime",
+                    "isRemote": False,
+                    "externalLink": "https://jobs.ashbyhq.com/acme/uuid-456",
+                }
+            ]
+        }
+
+        crawler._get_json = AsyncMock(return_value=mock_response)
+        jobs = await crawler.crawl("acme", ats_source_id)
+
+        assert len(jobs) == 1
+        j = jobs[0]
+        assert j["title"] == "Product Designer"
+        assert j["location"] == "Austin, TX"
+        assert j["external_job_id"] == "uuid-456"
+        assert j["department"] == "Design"
+        assert j["employment_type"] == "Full-time"
+        assert j["ats_type"] == "ashby"
+        assert j["ats_source_id"] == ats_source_id
+        assert j["source_url"] == "https://jobs.ashbyhq.com/acme/uuid-456"
+        assert j["remote"] is False
+        assert j["geo_restriction"] is not None
+
+    @pytest.mark.asyncio
+    async def test_is_remote_flag_sets_remote_true(self):
+        crawler = AshbyCrawler()
+        mock_response = {
+            "jobPostings": [
+                {
+                    "id": "r1",
+                    "title": "Remote PM",
+                    "department": None,
+                    "location": "",
+                    "employmentType": "FullTime",
+                    "isRemote": True,
+                    "externalLink": "https://jobs.ashbyhq.com/co/r1",
+                }
+            ]
+        }
+        crawler._get_json = AsyncMock(return_value=mock_response)
+        jobs = await crawler.crawl("co", uuid.uuid4())
+        assert jobs[0]["remote"] is True
+
+    @pytest.mark.asyncio
+    async def test_empty_postings_returns_empty_list(self):
+        crawler = AshbyCrawler()
+        crawler._get_json = AsyncMock(return_value={"jobPostings": []})
+        jobs = await crawler.crawl("nobody", uuid.uuid4())
+        assert jobs == []
+
+    @pytest.mark.asyncio
+    async def test_employment_type_mapping(self):
+        crawler = AshbyCrawler()
+        ats_source_id = uuid.uuid4()
+        for raw, expected in [
+            ("FullTime", "Full-time"),
+            ("PartTime", "Part-time"),
+            ("Contract", "Contract"),
+            ("Internship", "Internship"),
+        ]:
+            mock_response = {
+                "jobPostings": [
+                    {
+                        "id": "x",
+                        "title": "Role",
+                        "department": None,
+                        "location": "NYC",
+                        "employmentType": raw,
+                        "isRemote": False,
+                        "externalLink": "https://jobs.ashbyhq.com/co/x",
+                    }
+                ]
+            }
+            crawler._get_json = AsyncMock(return_value=mock_response)
+            jobs = await crawler.crawl("co", ats_source_id)
+            assert jobs[0]["employment_type"] == expected, f"Expected {expected} for {raw}"
