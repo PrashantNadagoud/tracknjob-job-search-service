@@ -73,10 +73,24 @@ class CrawlDispatcher:
     ) -> list[dict[str, Any]]:
         """Crawl the ATS source and return normalized job dicts.
 
+        Guaranteed to never raise — all exceptions are caught and logged.
         On failure returns an empty list.
-        Always updates the AtsSource row in the DB.
+        Always attempts to update the AtsSource row in the DB.
         Writes a CrawlDeadLetter row on every failure.
         """
+        try:
+            return await self._dispatch_inner(ats_source_id, db)
+        except Exception:
+            logger.exception(
+                "dispatch: unhandled exception for ats_source_id=%s", ats_source_id
+            )
+            return []
+
+    async def _dispatch_inner(
+        self,
+        ats_source_id: uuid.UUID,
+        db: AsyncSession,
+    ) -> list[dict[str, Any]]:
         ats_source: AtsSource | None = await db.get(AtsSource, ats_source_id)
         if ats_source is None:
             logger.error("dispatch: AtsSource %s not found", ats_source_id)
@@ -91,40 +105,54 @@ class CrawlDispatcher:
             logger.error(
                 "dispatch: no crawler registered for ats_type=%s", ats_source.ats_type
             )
-            await self._record_failure(
-                db=db,
-                ats_source=ats_source,
-                error_type="unknown_ats_type",
-                error_message=f"No crawler for ats_type={ats_source.ats_type!r}",
-                http_status=None,
-                raw_response=None,
-            )
+            try:
+                await self._record_failure(
+                    db=db,
+                    ats_source=ats_source,
+                    error_type="unknown_ats_type",
+                    error_message=f"No crawler for ats_type={ats_source.ats_type!r}",
+                    http_status=None,
+                    raw_response=None,
+                )
+            except Exception:
+                logger.exception("dispatch: failed to write dead letter")
             return []
 
-        ats_slug: str = ats_source.ats_slug or ""
+        # When crawl_url is set, pass it as the effective slug so crawlers that
+        # support full-URL overrides (e.g. Workday) can use it directly.
+        effective_slug: str = ats_source.crawl_url or ats_source.ats_slug or ""
 
         try:
-            jobs = await crawler.crawl(ats_slug, ats_source.id)
+            jobs = await crawler.crawl(effective_slug, ats_source.id)
         except RateLimitedException as exc:
             logger.warning(
                 "dispatch: rate-limited slug=%s ats_type=%s",
-                ats_slug, ats_source.ats_type,
+                effective_slug, ats_source.ats_type,
             )
-            await self._handle_rate_limit(db, ats_source, exc)
+            try:
+                await self._handle_rate_limit(db, ats_source, exc)
+            except Exception:
+                logger.exception("dispatch: failed to persist rate-limit state")
             return []
         except SlugNotFoundException as exc:
             logger.warning(
                 "dispatch: slug not found slug=%s ats_type=%s",
-                ats_slug, ats_source.ats_type,
+                effective_slug, ats_source.ats_type,
             )
-            await self._handle_slug_not_found(db, ats_source, exc)
+            try:
+                await self._handle_slug_not_found(db, ats_source, exc)
+            except Exception:
+                logger.exception("dispatch: failed to persist slug-not-found state")
             return []
         except Exception as exc:
             logger.exception(
                 "dispatch: crawl error slug=%s ats_type=%s",
-                ats_slug, ats_source.ats_type,
+                effective_slug, ats_source.ats_type,
             )
-            await self._handle_generic_error(db, ats_source, exc)
+            try:
+                await self._handle_generic_error(db, ats_source, exc)
+            except Exception:
+                logger.exception("dispatch: failed to persist error state")
             return []
 
         # Success path — inject company context and update AtsSource
@@ -134,23 +162,28 @@ class CrawlDispatcher:
             job["company_id"] = ats_source.company_id
             job.setdefault("country", ats_source.market)
 
-        await db.execute(
-            sa.update(AtsSource)
-            .where(AtsSource.id == ats_source.id)
-            .values(
-                last_crawled_at=now,
-                last_crawl_status="ok",
-                last_crawl_job_count=len(jobs),
-                consecutive_failures=0,
-                backoff_until=None,
-                updated_at=now,
+        try:
+            await db.execute(
+                sa.update(AtsSource)
+                .where(AtsSource.id == ats_source.id)
+                .values(
+                    last_crawled_at=now,
+                    last_crawl_status="ok",
+                    last_crawl_job_count=len(jobs),
+                    consecutive_failures=0,
+                    backoff_until=None,
+                    updated_at=now,
+                )
             )
-        )
-        await db.commit()
+            await db.commit()
+        except Exception:
+            logger.exception(
+                "dispatch: failed to persist success state slug=%s", effective_slug
+            )
 
         logger.info(
             "dispatch: success slug=%s ats_type=%s jobs=%d",
-            ats_slug, ats_source.ats_type, len(jobs),
+            effective_slug, ats_source.ats_type, len(jobs),
         )
         return jobs
 

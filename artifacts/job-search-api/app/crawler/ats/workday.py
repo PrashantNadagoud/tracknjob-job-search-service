@@ -25,6 +25,32 @@ _DEFAULT_WD_BASE = "https://{slug}.wd1.myworkdayjobs.com/wday/cxs/{slug}/Externa
 _JOB_LINK_BASE = "https://{slug}.wd1.myworkdayjobs.com/en-US/External"
 
 
+def _resolve_workday_urls(ats_slug: str) -> tuple[str, str]:
+    """Return (api_url, link_base) for a Workday slug or full URL override.
+
+    When the dispatcher sets ``crawl_url`` on an AtsSource, it is passed as
+    ``ats_slug``.  A full URL (starts with ``http``) is used directly as the
+    API endpoint; everything else is treated as a plain slug and routed to the
+    default ``wd1`` tenant URL.
+
+    Returns:
+        api_url:   POST endpoint for the Workday jobs API.
+        link_base: Base for constructing individual job page URLs.
+    """
+    if ats_slug.startswith("http"):
+        # Full crawl_url provided — use as-is; derive link_base from scheme+host
+        from urllib.parse import urlparse
+        parsed = urlparse(ats_slug)
+        host_base = f"{parsed.scheme}://{parsed.netloc}"
+        # Best-effort link base: replace /wday/cxs/.../jobs with /en-US
+        link_base = host_base + "/en-US/External"
+        return ats_slug, link_base
+    else:
+        api_url = _DEFAULT_WD_BASE.format(slug=ats_slug)
+        link_base = _JOB_LINK_BASE.format(slug=ats_slug)
+        return api_url, link_base
+
+
 class WorkdayCrawler(BaseATSCrawler):
     ats_type = "workday"
 
@@ -33,8 +59,9 @@ class WorkdayCrawler(BaseATSCrawler):
     ) -> list[dict[str, Any]]:
         jobs: list[dict[str, Any]] = []
         offset = 0
-        api_url = _DEFAULT_WD_BASE.format(slug=ats_slug)
-        link_base = _JOB_LINK_BASE.format(slug=ats_slug)
+        api_url, link_base = _resolve_workday_urls(ats_slug)
+        # Use the last segment of the host for display (e.g. "amazon" from amazon.wd3...)
+        display_slug = ats_slug.split(".")[0].lstrip("https://") if ats_slug.startswith("http") else ats_slug
 
         while True:
             data = await self._post_json(
@@ -91,7 +118,7 @@ class WorkdayCrawler(BaseATSCrawler):
                         "location": location,
                         "remote": is_remote,
                         "source_url": source_url,
-                        "source_label": f"{ats_slug} Careers (Workday)",
+                        "source_label": f"{display_slug} Careers (Workday)",
                         "posted_at": posted_at,
                         "geo_restriction": geo_restriction,
                         "ats_type": self.ats_type,

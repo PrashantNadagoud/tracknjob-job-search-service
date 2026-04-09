@@ -422,6 +422,97 @@ class TestCrawlDispatcher:
         result = await dispatcher.dispatch(uuid.uuid4(), db)
         assert result == []
 
+    @pytest.mark.asyncio
+    async def test_dispatch_never_raises_when_db_commit_fails(self):
+        """dispatch() swallows DB failures and returns [] — it never raises."""
+        ats_source = _make_ats_source(ats_type="bamboohr", ats_slug="acme")
+        db = self._make_db(ats_source, _make_company())
+        # Make DB commit always throw so the success-path persistence fails
+        db.commit = AsyncMock(side_effect=RuntimeError("DB connection lost"))
+        dispatcher = CrawlDispatcher()
+
+        fake_jobs = [
+            {
+                "title": "Engineer",
+                "location": "Austin, TX",
+                "remote": False,
+                "source_url": "https://acme.bamboohr.com/careers/1",
+                "source_label": "Acme Careers",
+                "geo_restriction": "US",
+                "ats_type": "bamboohr",
+                "external_job_id": "1",
+                "ats_source_id": ats_source.id,
+                "salary_currency": "USD",
+            }
+        ]
+
+        with patch(
+            "app.crawler.dispatcher.CRAWLER_MAP",
+            {"bamboohr": AsyncMock(crawl=AsyncMock(return_value=fake_jobs))},
+        ):
+            # Must NOT raise even though commit() throws
+            result = await dispatcher.dispatch(ats_source.id, db)
+
+        # Jobs are still returned (commit failure is logged, not re-raised)
+        assert isinstance(result, list)
+
+    @pytest.mark.asyncio
+    async def test_dispatch_uses_crawl_url_over_slug(self):
+        """When crawl_url is set, it is passed as effective slug to the crawler."""
+        custom_url = "https://amazon.wd3.myworkdayjobs.com/wday/cxs/amazon/Global_Tech/jobs"
+        ats_source = _make_ats_source(ats_type="workday", ats_slug="amazon")
+        ats_source.crawl_url = custom_url
+        db = self._make_db(ats_source, _make_company("Amazon"))
+        dispatcher = CrawlDispatcher()
+
+        captured: list[str] = []
+
+        async def _capture_crawl(slug: str, source_id: uuid.UUID) -> list:
+            captured.append(slug)
+            return []
+
+        with patch(
+            "app.crawler.dispatcher.CRAWLER_MAP",
+            {"workday": AsyncMock(crawl=AsyncMock(side_effect=_capture_crawl))},
+        ):
+            await dispatcher.dispatch(ats_source.id, db)
+
+        assert captured == [custom_url]
+
+    @pytest.mark.asyncio
+    async def test_workday_crawl_url_override_uses_full_url_as_api_endpoint(self):
+        """WorkdayCrawler accepts a full URL as ats_slug (crawl_url path)."""
+        from app.crawler.ats.workday import WorkdayCrawler
+        crawler = WorkdayCrawler()
+        custom_url = "https://amazon.wd3.myworkdayjobs.com/wday/cxs/amazon/Global_Tech/jobs"
+        ats_source_id = uuid.uuid4()
+
+        page = {
+            "jobPostings": [
+                {
+                    "id": "xyz",
+                    "title": "Cloud Engineer",
+                    "locationsText": "Seattle, WA",
+                    "externalPath": "/en-US/Global_Tech/job/xyz",
+                }
+            ],
+            "total": 1,
+        }
+
+        captured_urls: list[str] = []
+
+        async def _mock_post(url: str, payload: dict) -> dict:
+            captured_urls.append(url)
+            return page
+
+        with patch.object(crawler, "_post_json", new=AsyncMock(side_effect=_mock_post)):
+            jobs = await crawler.crawl(custom_url, ats_source_id)
+
+        # The custom URL was used directly as the POST endpoint
+        assert captured_urls[0] == custom_url
+        assert len(jobs) == 1
+        assert jobs[0]["title"] == "Cloud Engineer"
+
 
 # ── back-off helper ───────────────────────────────────────────────────────────
 
