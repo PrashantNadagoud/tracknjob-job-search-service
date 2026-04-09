@@ -1,0 +1,61 @@
+Add SQLAlchemy ORM models for  AtsSource ,  CompanyDiscoveryQueue , and  CrawlDeadLetter  in  app/models.py  matching the above schemas.
+Part 2 — New ATS Crawlers (US Market)
+Create the following crawler classes in  app/crawlers/ . Each must follow the same interface as existing crawlers — implement a  crawl(ats_slug: str, ats_source_id: UUID) -> listdict  async method that returns a list of normalized listing dicts compatible with the  jobs.listings  schema.
+Each crawler must:
+	•	Set  ats_type  on every listing dict it returns
+	•	Set  external_job_id  from the ATS-native job ID field
+	•	Set  geo_restriction  using the existing  geo_classifier.py  logic
+	•	On HTTP 429: raise a  RateLimitedException  (create this exception class if it doesn’t exist)
+	•	On HTTP 404: raise a  SlugNotFoundException 
+	•	On any other error: raise a  CrawlException  with the error message
+Crawlers to implement:
+1.  app/crawlers/workday.py  — WorkdayCrawler
+	•	URL pattern:  https://{slug}.wd1.myworkdayjobs.com/wday/cxs/{slug}/External/jobs 
+	•	Method: POST with JSON body  {"limit": 20, "offset": 0, "searchText": "", "locations": []} 
+	•	Paginate by incrementing  offset  by 20 until  total  is reached
+	•	Response path:  jobPostings[]  → each has  title ,  locationsText ,  postedOn ,  externalPath 
+	•	 external_job_id : extract from  externalPath  (last path segment)
+	•	 source_url :  https://{slug}.wd1.myworkdayjobs.com/en-US/{slug}/job/{externalPath} 
+	•	 employment_type : from  jobPostingType  if present
+2.  app/crawlers/smartrecruiters.py  — SmartRecruitersCrawler
+	•	URL:  https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=100&offset={offset} 
+	•	Paginate via  offset 
+	•	Response path:  content[]  → each has  id ,  name ,  location ,  releasedDate ,  department.label 
+	•	 external_job_id :  id  field
+	•	 source_url :  https://jobs.smartrecruiters.com/{slug}/{id} 
+3.  app/crawlers/bamboohr.py  — BambooHRCrawler
+	•	URL:  https://{slug}.bamboohr.com/careers/list 
+	•	Method: GET with header  Accept: application/json 
+	•	Response path:  result[]  → each has  id ,  title ,  location.city ,  location.state ,  employmentStatusLabel ,  departmentLabel 
+	•	 external_job_id :  id  field
+	•	 source_url :  https://{slug}.bamboohr.com/careers/{id} 
+4.  app/crawlers/rippling.py  — RipplingCrawler
+	•	URL:  https://app.rippling.com/api/ats/job-board/public/jobs/?company={slug} 
+	•	Response: JSON array of job objects with  id ,  title ,  location ,  created_at ,  department 
+	•	 external_job_id :  id  field
+	•	 source_url :  https://app.rippling.com/jobs/{slug}/{id} 
+5.  app/crawlers/jazzhr.py  — JazzHRCrawler
+	•	URL:  https://api.resumatorapi.com/v1/jobs?apikey={slug}&status=Open 
+	•	Response: JSON array with  id ,  title ,  city ,  state ,  country ,  original_open_date ,  department 
+	•	 external_job_id :  id  field
+	•	 source_url :  https://app.jazz.co/{slug}/{id} 
+Part 3 — New ATS Crawlers (India Market)
+6.  app/crawlers/naukri.py  — NaukriCrawler
+	•	URL:  https://www.naukri.com/jobapi/v3/search?noOfResults=20&urlType=search_by_keyword&searchType=adv&keyword={keyword}&pageNo={page}&k={keyword}&l=&experience=&ctcFilter=&sort=&industries=&functionAreaIdGt=&educationId=&locationTypeGt=&jobTypeGt=&workModeGt= 
+	•	Set request headers:  appid: 109 ,  systemid: 109 ,  User-Agent: Mozilla/5.0 
+	•	Paginate via  pageNo 
+	•	Response path:  jobDetails[]  → each has  jobId ,  title ,  companyName ,  placeholders  (array with location),  date ,  department ,  salary 
+	•	 external_job_id :  jobId 
+	•	 source_url :  https://www.naukri.com/job-listings-{jobId} 
+	•	 geo_restriction : always set to  'IN' 
+	•	 salary_currency :  'INR' 
+	•	 country :  'IN' 
+7.  app/crawlers/foundit.py  — FounditCrawler
+	•	URL:  https://www.foundit.in/middleware/jobsearch/v1/search?query={keyword}&locations=India&start={offset}&rows=25 
+	•	Set request headers:  User-Agent: Mozilla/5.0 
+	•	Response path:  jobSearchResponse.jobs[] 
+	•	 geo_restriction : always  'IN' 
+	•	 salary_currency :  'INR' 
+	•	 country :  'IN' 
+Part 4 — Crawl Dispatcher
+Create  app/crawlers/dispatcher.py  with a  CrawlDispatcher  class:
