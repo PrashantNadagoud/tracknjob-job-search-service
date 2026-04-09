@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from decimal import Decimal
 
 import sqlalchemy as sa
@@ -56,6 +57,22 @@ class Company(Base):
     company_type: Mapped[str] = mapped_column(Text, server_default="unknown", nullable=False)
     stock_ticker: Mapped[str | None] = mapped_column(Text, nullable=True)
     stock_exchange: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ── Columns added in migration 0008 ─────────────────────────────────────
+    crunchbase_uuid: Mapped[str | None] = mapped_column(Text, nullable=True)
+    linkedin_slug: Mapped[str | None] = mapped_column(Text, nullable=True)
+    primary_ats_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    india_presence: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    india_offices: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hq_city: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hq_country: Mapped[str | None] = mapped_column(sa.String(2), nullable=True)
+    categories: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    last_enrichment_attempt: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    enrichment_failures: Mapped[int] = mapped_column(
+        Integer, server_default="0", nullable=False
+    )
 
 
 class Listing(Base):
@@ -77,6 +94,17 @@ class Listing(Base):
             "title",
             postgresql_using="gin",
             postgresql_ops={"title": "gin_trgm_ops"},
+        ),
+        # ATS dedup index (partial) — added in migration 0008
+        Index(
+            "idx_listings_ats_dedup",
+            "company_id",
+            "ats_type",
+            "external_job_id",
+            unique=True,
+            postgresql_where=sa.text(
+                "external_job_id IS NOT NULL AND company_id IS NOT NULL"
+            ),
         ),
         {"schema": "jobs"},
     )
@@ -114,6 +142,170 @@ class Listing(Base):
         nullable=True,
     )
     geo_restriction: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ── Columns added in migration 0008 ─────────────────────────────────────
+    ats_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ats_source_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        sa.ForeignKey("jobs.ats_sources.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    external_job_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title_normalized: Mapped[str | None] = mapped_column(Text, nullable=True)
+    seniority_level: Mapped[str | None] = mapped_column(Text, nullable=True)
+    employment_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    department: Mapped[str | None] = mapped_column(Text, nullable=True)
+    salary_currency: Mapped[str] = mapped_column(
+        sa.String(3), server_default="USD", nullable=False
+    )
+    salary_min_local: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    salary_max_local: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    salary_period: Mapped[str | None] = mapped_column(
+        Text, server_default="annual", nullable=True
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+
+class AtsSource(Base):
+    """Tracks per-company ATS configuration and crawl state."""
+
+    __tablename__ = "ats_sources"
+    __table_args__ = (
+        sa.UniqueConstraint("company_id", "ats_type", name="uq_ats_source"),
+        Index("idx_ats_sources_company", "company_id"),
+        Index(
+            "idx_ats_sources_crawl_due",
+            "last_crawled_at",
+            postgresql_where=sa.text("is_active = true"),
+        ),
+        {"schema": "jobs"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        sa.ForeignKey("jobs.companies.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ats_type: Mapped[str] = mapped_column(Text, nullable=False)
+    ats_slug: Mapped[str | None] = mapped_column(Text, nullable=True)
+    crawl_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    market: Mapped[str] = mapped_column(Text, server_default="US", nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, server_default="true", nullable=False
+    )
+    last_crawled_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    last_crawl_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_crawl_job_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, server_default="0", nullable=False
+    )
+    backoff_until: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    discovery_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CompanyDiscoveryQueue(Base):
+    """Candidate companies waiting to be verified and registered."""
+
+    __tablename__ = "company_discovery_queue"
+    __table_args__ = (
+        Index(
+            "idx_discovery_queue_pending",
+            "created_at",
+            postgresql_where=sa.text("status = 'pending'"),
+        ),
+        {"schema": "jobs"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    company_name: Mapped[str] = mapped_column(Text, nullable=False)
+    website: Mapped[str | None] = mapped_column(Text, nullable=True)
+    suspected_ats: Mapped[str | None] = mapped_column(Text, nullable=True)
+    suspected_slug: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    market: Mapped[str] = mapped_column(Text, server_default="US", nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, server_default="pending", nullable=False
+    )
+    resolved_company_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        sa.ForeignKey("jobs.companies.id"),
+        nullable=True,
+    )
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, server_default="0", nullable=False
+    )
+    last_attempted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CrawlDeadLetter(Base):
+    """Failed crawl attempts that require investigation or resolution."""
+
+    __tablename__ = "crawl_dead_letters"
+    __table_args__ = (
+        Index(
+            "idx_dead_letters_unresolved",
+            sa.text("attempted_at DESC"),
+            postgresql_where=sa.text("resolved = false"),
+        ),
+        {"schema": "jobs"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    ats_source_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        sa.ForeignKey("jobs.ats_sources.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    ats_type: Mapped[str] = mapped_column(Text, nullable=False)
+    ats_slug: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_type: Mapped[str] = mapped_column(Text, nullable=False)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempted_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    resolved: Mapped[bool] = mapped_column(
+        Boolean, server_default="false", nullable=False
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class SavedSearch(Base):
