@@ -340,11 +340,14 @@ class TestCrawlDispatcher:
         assert dead_letter.http_status == 429
         assert dead_letter.ats_type == "workday"
 
-        # The UPDATE call should carry backoff_until ≈ now + 30 min
+        # The UPDATE statement should target ats_sources
         update_call = db.execute.call_args_list[0]
-        compiled = update_call[0][0]
-        # Verify the update statement targets AtsSource (check via string repr)
-        assert "ats_sources" in str(compiled).lower()
+        compiled_stmt = update_call[0][0]
+        stmt_str = str(compiled_stmt).lower()
+        assert "ats_sources" in stmt_str
+        # consecutive_failures and last_crawl_status must appear in the UPDATE
+        assert "consecutive_failures" in stmt_str
+        assert "last_crawl_status" in stmt_str
 
     @pytest.mark.asyncio
     async def test_slug_not_found_deactivates_source(self):
@@ -371,9 +374,10 @@ class TestCrawlDispatcher:
         assert dead_letter.error_type == "slug_not_found"
         assert dead_letter.http_status == 404
 
-        # The UPDATE statement should set is_active=False
+        # The UPDATE statement should set is_active=False and last_crawl_status
         update_stmt_str = str(db.execute.call_args_list[0][0][0]).lower()
         assert "is_active" in update_stmt_str
+        assert "last_crawl_status" in update_stmt_str
 
     @pytest.mark.asyncio
     async def test_crawl_exception_increments_failures_and_backs_off(self):
@@ -512,6 +516,36 @@ class TestCrawlDispatcher:
         assert captured_urls[0] == custom_url
         assert len(jobs) == 1
         assert jobs[0]["title"] == "Cloud Engineer"
+        # Job link must NOT duplicate path segments from externalPath
+        source_url = jobs[0]["source_url"]
+        assert source_url == "https://amazon.wd3.myworkdayjobs.com/en-US/Global_Tech/job/xyz"
+
+    @pytest.mark.asyncio
+    async def test_workday_external_path_with_locale_prefix_no_duplication(self):
+        """externalPath starting with /en-US/... must NOT duplicate path in source_url."""
+        from app.crawler.ats.workday import WorkdayCrawler
+        crawler = WorkdayCrawler()
+        ats_source_id = uuid.uuid4()
+
+        page = {
+            "jobPostings": [
+                {
+                    "id": "abc",
+                    "title": "Staff Eng",
+                    "locationsText": "San Francisco",
+                    "externalPath": "/en-US/External/job/abc",
+                }
+            ],
+            "total": 1,
+        }
+        with patch.object(crawler, "_post_json", new=AsyncMock(return_value=page)):
+            jobs = await crawler.crawl("acme", ats_source_id)
+
+        # With host_base = "https://acme.wd1.myworkdayjobs.com" and
+        # external_path = "/en-US/External/job/abc", the URL must NOT be:
+        # "https://acme.wd1.myworkdayjobs.com/en-US/External/en-US/External/job/abc"
+        expected = "https://acme.wd1.myworkdayjobs.com/en-US/External/job/abc"
+        assert jobs[0]["source_url"] == expected
 
 
 # ── back-off helper ───────────────────────────────────────────────────────────
