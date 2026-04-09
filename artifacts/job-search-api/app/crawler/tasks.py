@@ -927,10 +927,14 @@ async def _process_discovery_item(
 async def _async_run_discovery_queue() -> dict[str, Any]:
     """Process up to 50 pending rows from company_discovery_queue.
 
-    Probes each candidate using the real crawler (via CRAWLER_MAP).
-    Company + AtsSource rows are created ONLY on a successful probe.
-    On failure: increments attempt_count; rejects at >= 3 attempts.
-    No temporary DB entities are created for failed probes.
+    Probes each candidate using the real crawler (via CrawlDispatcher).
+    Because CrawlDispatcher.dispatch() requires a real AtsSource row in the DB,
+    a temporary probe Company (slug ``{real_slug}-probe``) and AtsSource
+    (is_active=False) are created before each probe and reused across retries.
+    On success: probe entities promoted to canonical company, queue item resolved.
+    On failure: attempt_count incremented, probe rows persist for the next run.
+    On rejection (>= 3 failures): probe entities deleted and item rejected.
+    Unexpected exceptions also increment attempt_count (best-effort).
     """
     Session = _make_session()
 
