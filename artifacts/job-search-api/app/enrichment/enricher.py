@@ -135,12 +135,20 @@ class CompanyEnricher:
         for fld, value in data.items():
             # G3: skip empty/null incoming values
             if value is None or value == "" or value == []:
+                logger.debug(
+                    "Enricher validation rejected field '%s' value '%s' for company %s",
+                    fld, value, record.slug,
+                )
                 continue
 
             # G3: additive-only — skip if record field is already populated
             # Treat "unknown" (company_type sentinel) and [] as "not yet set"
             existing = getattr(record, fld, None)
             if existing is not None and existing != "unknown" and existing != []:
+                logger.debug(
+                    "Enricher validation rejected field '%s' value '%s' for company %s",
+                    fld, value, record.slug,
+                )
                 continue
 
             # G2: field-specific validation
