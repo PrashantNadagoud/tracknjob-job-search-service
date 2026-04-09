@@ -65,7 +65,7 @@ class Company(Base):
     india_offices: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     hq_city: Mapped[str | None] = mapped_column(Text, nullable=True)
-    hq_country: Mapped[str | None] = mapped_column(sa.String(2), nullable=True)
+    hq_country: Mapped[str | None] = mapped_column(sa.CHAR(2), nullable=True)
     categories: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     last_enrichment_attempt: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
@@ -155,7 +155,7 @@ class Listing(Base):
     employment_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     department: Mapped[str | None] = mapped_column(Text, nullable=True)
     salary_currency: Mapped[str] = mapped_column(
-        sa.String(3), server_default="USD", nullable=False
+        sa.CHAR(3), server_default="USD", nullable=False
     )
     salary_min_local: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 2), nullable=True
@@ -180,7 +180,7 @@ class AtsSource(Base):
         Index("idx_ats_sources_company", "company_id"),
         Index(
             "idx_ats_sources_crawl_due",
-            "last_crawled_at",
+            sa.text("last_crawled_at ASC NULLS FIRST"),
             postgresql_where=sa.text("is_active = true"),
         ),
         {"schema": "jobs"},
