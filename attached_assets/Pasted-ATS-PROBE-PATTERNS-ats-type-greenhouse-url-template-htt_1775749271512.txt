@@ -1,0 +1,76 @@
+ATS_PROBE_PATTERNS = [
+    {
+        "ats_type": "greenhouse",
+        "url_template": "https://boards.greenhouse.io/{slug}/jobs",
+        "success_check": "json_key",        # expect JSON with 'jobs' key
+        "method": "GET",
+    },
+    {
+        "ats_type": "lever",
+        "url_template": "https://jobs.lever.co/{slug}",
+        "success_check": "status_200",
+        "method": "GET",
+    },
+    {
+        "ats_type": "ashby",
+        "url_template": "https://jobs.ashbyhq.com/{slug}",
+        "success_check": "status_200",
+        "method": "GET",
+    },
+    {
+        "ats_type": "workday",
+        "url_template": "https://{slug}.wd1.myworkdayjobs.com/wday/cxs/{slug}/External/jobs",
+        "success_check": "status_200",
+        "method": "POST",
+        "body": {"limit": 1, "offset": 0, "searchText": "", "locations": []},
+    },
+    {
+        "ats_type": "bamboohr",
+        "url_template": "https://{slug}.bamboohr.com/careers/list",
+        "success_check": "status_200",
+        "method": "GET",
+        "headers": {"Accept": "application/json"},
+    },
+    {
+        "ats_type": "smartrecruiters",
+        "url_template": "https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=1",
+        "success_check": "status_200",
+        "method": "GET",
+    },
+    {
+        "ats_type": "rippling",
+        "url_template": "https://app.rippling.com/api/ats/job-board/public/jobs/?company={slug}",
+        "success_check": "status_200",
+        "method": "GET",
+    },
+]
+
+class ATSProber:
+    def __init__(self, concurrency: int = 5):
+        # Max 5 concurrent probes per company to avoid hammering ATS servers
+        ...
+
+    async def probe(self, company_name: str, website: str, yc_slug: str | None) -> dict | None:
+        """
+        Probes all ATS_PROBE_PATTERNS concurrently for the derived slug.
+        Returns first successful match:
+        {
+            "ats_type": str,
+            "ats_slug": str,
+            "crawl_url": str    # the resolved URL that returned 200
+        }
+        Returns None if no ATS match found.
+
+        Rules:
+        - Timeout per probe: 8 seconds
+        - On HTTP 429: log warning, skip that ATS type (do not retry)
+        - On HTTP 404: expected — move to next ATS type silently
+        - On any other error: log debug, move to next ATS type
+        - Do NOT follow redirects blindly — a redirect from greenhouse to
+          the company homepage means the slug is wrong
+        """
+
+    def _derive_slug(self, company_name: str, website: str, yc_slug: str | None) -> str:
+        """
+        Derives the most likely ATS slug using the rules defined above.
+        """
