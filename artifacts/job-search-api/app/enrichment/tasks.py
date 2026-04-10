@@ -127,7 +127,7 @@ async def _async_enrich_new_companies() -> None:
                                 else None
                             ),
                             "remote_policy": record.remote_policy,
-                            "perks": record.perks,
+                            "perks": json.dumps(record.perks) if record.perks else None,
                             "salary_min_usd": record.salary_min_usd,
                             "salary_max_usd": record.salary_max_usd,
                             "salary_source": record.salary_source,
@@ -228,7 +228,7 @@ async def _async_reenrich_stale_companies() -> None:
                                 else None
                             ),
                             "remote_policy": record.remote_policy,
-                            "perks": record.perks,
+                            "perks": json.dumps(record.perks) if record.perks else None,
                             "salary_min_usd": record.salary_min_usd,
                             "salary_max_usd": record.salary_max_usd,
                             "salary_source": record.salary_source,

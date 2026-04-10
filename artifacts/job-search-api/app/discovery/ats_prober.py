@@ -197,7 +197,11 @@ async def _probe_pattern(
             matched = False
 
     if matched:
-        return {"ats_type": ats_type, "ats_slug": slug, "crawl_url": url}
+        return {
+            "ats_type": ats_type,
+            "ats_slug": slug,
+            "crawl_url": url if ats_type == "workday" else None,
+        }
 
     return None
 
