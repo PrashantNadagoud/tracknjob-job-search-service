@@ -63,19 +63,23 @@ ATS_PROBE_PATTERNS: list[dict[str, Any]] = [
         "method": "GET",
         "url_template": "https://api.bamboohr.com/api/gateway.php/{slug}/v1/applicant_tracking/jobs",
         "extra_headers": {"Accept": "application/json"},
-        "success_check": lambda data: isinstance(data, (list, dict)),
+        "success_check": lambda data: isinstance(data, list) and len(data) > 0,
     },
     {
         "ats_type": "smartrecruiters",
         "method": "GET",
         "url_template": "https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=1",
-        "success_key": "content",
+        "success_check": lambda data: (
+            isinstance(data, dict)
+            and data.get("totalFound", 0) > 0
+            and "content" in data
+        ),
     },
     {
         "ats_type": "rippling",
         "method": "GET",
         "url_template": "https://api.rippling.com/platform/api/ats/v1/jobs/?company_slug={slug}&limit=1",
-        "success_check": lambda data: isinstance(data, (list, dict)),
+        "success_check": lambda data: isinstance(data, dict) and data.get("count", 0) > 0,
     },
 ]
 
