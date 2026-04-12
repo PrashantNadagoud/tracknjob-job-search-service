@@ -995,17 +995,24 @@ async def _async_reactivate_sources() -> int:
 
     Only touches rows where is_active=False AND last_crawl_status='error'.
     Ignores 'slug_not_found' or other permanent rejection statuses.
+
+    Discovery probe AtsSource rows (linked to probe Companies whose slug ends
+    with ``-probe``) are excluded — their ``is_active=False`` state is
+    intentional and must not be overridden by this periodic reactivation task.
     """
     Session = _make_session()
     async with Session() as session:
         result = await session.execute(
             text("""
-                UPDATE jobs.ats_sources
+                UPDATE jobs.ats_sources AS src
                 SET    is_active = TRUE,
                        consecutive_failures = 0,
                        backoff_until = NULL
-                WHERE  is_active = FALSE
-                  AND  last_crawl_status = 'error'
+                FROM   jobs.companies AS co
+                WHERE  co.id = src.company_id
+                  AND  src.is_active = FALSE
+                  AND  src.last_crawl_status = 'error'
+                  AND  co.slug NOT LIKE '%-probe'
             """)
         )
         await session.commit()
