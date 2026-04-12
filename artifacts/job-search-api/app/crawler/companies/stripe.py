@@ -21,7 +21,7 @@ _BASE_URL = "https://stripe.com"
 
 
 class StripeCrawler(BaseCrawler):
-    source_label = "Stripe Careers"
+    source_label = "Official"
     careers_url = "https://stripe.com/jobs"
     country = "US"
 
@@ -68,6 +68,10 @@ class StripeCrawler(BaseCrawler):
                 country=None,
             )
 
+            dept = item.get("department", {}).get("name") if isinstance(item.get("department"), dict) else None
+            if not dept:
+                dept = item.get("team", {}).get("name") if isinstance(item.get("team"), dict) else None
+
             jobs.append(
                 {
                     "title": title,
@@ -78,6 +82,7 @@ class StripeCrawler(BaseCrawler):
                     "source_label": self.source_label,
                     "posted_at": posted_at,
                     "geo_restriction": geo_restriction,
+                    "department": dept,
                 }
             )
         return jobs

@@ -13,7 +13,7 @@ _ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/linear"
 
 
 class LinearCrawler(BaseCrawler):
-    source_label = "Linear Careers"
+    source_label = "Official"
     careers_url = "https://linear.app/careers"
     country = "US"
 

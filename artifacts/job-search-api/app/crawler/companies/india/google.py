@@ -15,7 +15,7 @@ _CAREERS_URL = "https://careers.google.com/jobs/results/?location=India"
 
 
 class GoogleIndiaCrawler(BaseCrawler):
-    source_label = "Google India Careers"
+    source_label = "Official"
     careers_url = _CAREERS_URL
     country = "IN"
 

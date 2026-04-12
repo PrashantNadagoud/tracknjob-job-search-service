@@ -15,7 +15,7 @@ _CAREERS_URL = "https://www.flipkartcareers.com/#!/joblist"
 
 
 class FlipkartCrawler(BaseCrawler):
-    source_label = "Flipkart Careers"
+    source_label = "Official"
     careers_url = _CAREERS_URL
     country = "IN"
 

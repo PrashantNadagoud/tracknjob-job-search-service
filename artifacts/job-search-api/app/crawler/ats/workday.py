@@ -117,7 +117,7 @@ class WorkdayCrawler(BaseATSCrawler):
                         "location": location,
                         "remote": is_remote,
                         "source_url": source_url,
-                        "source_label": f"{display_slug} Careers (Workday)",
+                        "source_label": "Workday",
                         "posted_at": posted_at,
                         "geo_restriction": geo_restriction,
                         "ats_type": self.ats_type,
