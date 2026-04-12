@@ -20,7 +20,7 @@ _CAREERS_URL = "https://www.amazon.jobs/en/search?country=IN"
 
 
 class AmazonIndiaCrawler(BaseCrawler):
-    source_label = "Amazon India Careers"
+    source_label = "Official"
     careers_url = _CAREERS_URL
     country = "IN"
 

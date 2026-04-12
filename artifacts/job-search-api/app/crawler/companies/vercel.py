@@ -13,7 +13,7 @@ _GREENHOUSE_API = "https://boards-api.greenhouse.io/v1/boards/vercel/jobs"
 
 
 class VercelCrawler(BaseCrawler):
-    source_label = "Vercel Careers"
+    source_label = "Official"
     careers_url = "https://vercel.com/careers"
     country = "US"
 

@@ -78,7 +78,7 @@ class SmartRecruitersCrawler(BaseATSCrawler):
                         "location": location_raw,
                         "remote": is_remote,
                         "source_url": source_url,
-                        "source_label": f"{ats_slug} Careers (SmartRecruiters)",
+                        "source_label": "SmartRecruiters",
                         "posted_at": None,
                         "geo_restriction": geo_restriction,
                         "ats_type": self.ats_type,

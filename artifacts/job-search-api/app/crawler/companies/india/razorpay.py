@@ -15,7 +15,7 @@ _CAREERS_URL = "https://razorpay.com/jobs/"
 
 
 class RazorpayCrawler(BaseCrawler):
-    source_label = "Razorpay Careers"
+    source_label = "Official"
     careers_url = _CAREERS_URL
     country = "IN"
 

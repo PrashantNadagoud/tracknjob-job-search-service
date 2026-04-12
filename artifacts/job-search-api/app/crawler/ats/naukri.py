@@ -85,7 +85,7 @@ class NaukriCrawler(BaseATSCrawler):
                         "location": location_raw,
                         "remote": False,
                         "source_url": source_url,
-                        "source_label": f"{ats_slug} Jobs (Naukri)",
+                        "source_label": "Naukri",
                         "posted_at": posted_at,
                         "geo_restriction": "IN",
                         "country": "IN",

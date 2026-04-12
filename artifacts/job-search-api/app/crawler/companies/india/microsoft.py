@@ -15,7 +15,7 @@ _CAREERS_URL = "https://jobs.microsoft.com/us/en/search?location=India"
 
 
 class MicrosoftIndiaCrawler(BaseCrawler):
-    source_label = "Microsoft India Careers"
+    source_label = "Official"
     careers_url = _CAREERS_URL
     country = "IN"
 

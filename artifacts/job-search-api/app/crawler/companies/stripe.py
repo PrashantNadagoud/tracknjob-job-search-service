@@ -21,7 +21,7 @@ _BASE_URL = "https://stripe.com"
 
 
 class StripeCrawler(BaseCrawler):
-    source_label = "Stripe Careers"
+    source_label = "Official"
     careers_url = "https://stripe.com/jobs"
     country = "US"
 

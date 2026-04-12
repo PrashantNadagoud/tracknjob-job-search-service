@@ -83,7 +83,7 @@ class AshbyCrawler(BaseATSCrawler):
                     "location": location_raw,
                     "remote": is_remote,
                     "source_url": source_url,
-                    "source_label": f"{ats_slug} Careers (Ashby)",
+                    "source_label": "Ashby",
                     "posted_at": None,
                     "geo_restriction": geo_restriction,
                     "ats_type": self.ats_type,

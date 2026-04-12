@@ -90,7 +90,7 @@ class LeverCrawler(BaseATSCrawler):
                         "location": location_raw,
                         "remote": is_remote,
                         "source_url": source_url,
-                        "source_label": f"{ats_slug} Careers (Lever)",
+                        "source_label": "Lever",
                         "posted_at": posted_at,
                         "geo_restriction": geo_restriction,
                         "ats_type": self.ats_type,
