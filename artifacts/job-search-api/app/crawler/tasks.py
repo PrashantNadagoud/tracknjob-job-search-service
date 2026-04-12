@@ -54,6 +54,7 @@ def _sanitize_job(job: dict[str, Any]) -> dict[str, Any]:
         "posted_at": job.get("posted_at"),
         "country": job.get("country", "US"),
         "geo_restriction": job.get("geo_restriction") or None,
+        "department": job.get("department") or None,
     }
 
 
