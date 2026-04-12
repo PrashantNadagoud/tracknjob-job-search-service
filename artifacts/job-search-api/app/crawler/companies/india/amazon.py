@@ -82,6 +82,7 @@ class AmazonIndiaCrawler(BaseCrawler):
                     work_type="remote" if is_remote else "",
                     country=self.country,
                 )
+                dept = item.get("business_category") or item.get("job_category") or item.get("category")
                 jobs.append(
                     {
                         "title": title,
@@ -93,6 +94,7 @@ class AmazonIndiaCrawler(BaseCrawler):
                         "posted_at": posted_at,
                         "country": self.country,
                         "geo_restriction": geo_restriction,
+                        "department": dept,
                     }
                 )
             if len(batch) < page_size:
