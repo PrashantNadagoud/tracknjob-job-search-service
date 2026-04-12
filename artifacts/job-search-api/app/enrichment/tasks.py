@@ -244,7 +244,7 @@ async def _async_reenrich_stale_companies() -> None:
 @celery_app.task(name="app.enrichment.tasks.enrich_new_companies", bind=True, max_retries=2)
 def enrich_new_companies(self):
     try:
-        asyncio.get_event_loop().run_until_complete(_async_enrich_new_companies())
+        asyncio.run(_async_enrich_new_companies())
     except Exception as exc:
         logger.exception("enrich_new_companies task failed")
         raise self.retry(exc=exc, countdown=300)
@@ -253,7 +253,7 @@ def enrich_new_companies(self):
 @celery_app.task(name="app.enrichment.tasks.reenrich_stale_companies", bind=True, max_retries=2)
 def reenrich_stale_companies(self):
     try:
-        asyncio.get_event_loop().run_until_complete(_async_reenrich_stale_companies())
+        asyncio.run(_async_reenrich_stale_companies())
     except Exception as exc:
         logger.exception("reenrich_stale_companies task failed")
         raise self.retry(exc=exc, countdown=600)

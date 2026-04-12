@@ -35,10 +35,10 @@ async def test_yc_scraper_filters_no_website():
         {"name": "EmptyWebsite", "website": "", "slug": "ew", "status": "Active"},
     ]
 
-    async def _fake_fetch_json(self):
+    async def _fetch_from_api(self, max_pages: int = 10):
         return raw
 
-    with patch.object(YCScraper, "_fetch_json", _fake_fetch_json):
+    with patch.object(YCScraper, "_fetch_from_api", _fetch_from_api):
         scraper = YCScraper()
         result = await scraper.fetch()
 
@@ -57,10 +57,10 @@ async def test_yc_scraper_filters_inactive_and_acquired():
         {"name": "Dead", "website": "https://d.com", "slug": "d", "status": "dead"},
     ]
 
-    async def _fake_fetch_json(self):
+    async def _fetch_from_api(self, max_pages: int = 10):
         return raw
 
-    with patch.object(YCScraper, "_fetch_json", _fake_fetch_json):
+    with patch.object(YCScraper, "_fetch_from_api", _fetch_from_api):
         scraper = YCScraper()
         result = await scraper.fetch()
 
@@ -74,14 +74,14 @@ async def test_yc_scraper_falls_back_to_html_on_403():
         {"name": "HTMLCo", "website": "https://htmlco.com", "slug": "htmlco"},
     ]
 
-    async def _fake_fetch_json(self):
+    async def _fetch_from_api(self, max_pages: int = 10):
         return None
 
     async def _fake_scrape_html(self):
         return html_companies
 
     with (
-        patch.object(YCScraper, "_fetch_json", _fake_fetch_json),
+        patch.object(YCScraper, "_fetch_from_api", _fetch_from_api),
         patch.object(YCScraper, "_scrape_html", _fake_scrape_html),
     ):
         scraper = YCScraper()
@@ -97,10 +97,10 @@ async def test_yc_scraper_normalises_website():
         {"name": "NoProt", "website": "example.com", "slug": "np", "status": "Active"},
     ]
 
-    async def _fake_fetch_json(self):
+    async def _fetch_from_api(self, max_pages: int = 10):
         return raw
 
-    with patch.object(YCScraper, "_fetch_json", _fake_fetch_json):
+    with patch.object(YCScraper, "_fetch_from_api", _fetch_from_api):
         scraper = YCScraper()
         result = await scraper.fetch()
 
@@ -193,7 +193,8 @@ async def test_prober_returns_match_on_greenhouse_success():
     assert result is not None
     assert result["ats_type"] == "greenhouse"
     assert result["ats_slug"] == "greencomp"
-    assert "greenhouse.io" in result["crawl_url"]
+    # Greenhouse should return None for crawl_url
+    assert result.get("crawl_url") is None
 
 
 @pytest.mark.asyncio
