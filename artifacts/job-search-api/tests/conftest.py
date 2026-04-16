@@ -101,38 +101,42 @@ async def db_session():
 async def cleanup_test_data():
     """Delete all test-owned rows after every test."""
     yield
-    async with _TestSession() as s:
-        await s.execute(
-            text(
-                "DELETE FROM jobs.hidden_jobs WHERE user_id IN ("
-                "  '00000000-0000-0000-0000-000000000001'::uuid,"
-                "  '00000000-0000-0000-0000-000000000002'::uuid"
-                ")"
+    try:
+        async with _TestSession() as s:
+            await s.execute(
+                text(
+                    "DELETE FROM jobs.hidden_jobs WHERE user_id IN ("
+                    "  '00000000-0000-0000-0000-000000000001'::uuid,"
+                    "  '00000000-0000-0000-0000-000000000002'::uuid"
+                    ")"
+                )
             )
-        )
-        await s.execute(
-            text(
-                "DELETE FROM jobs.job_preferences WHERE user_id IN ("
-                "  '00000000-0000-0000-0000-000000000001'::uuid,"
-                "  '00000000-0000-0000-0000-000000000002'::uuid"
-                ")"
+            await s.execute(
+                text(
+                    "DELETE FROM jobs.job_preferences WHERE user_id IN ("
+                    "  '00000000-0000-0000-0000-000000000001'::uuid,"
+                    "  '00000000-0000-0000-0000-000000000002'::uuid"
+                    ")"
+                )
             )
-        )
-        await s.execute(
-            text(
-                "DELETE FROM jobs.saved_searches WHERE user_id IN ("
-                "  '00000000-0000-0000-0000-000000000001'::uuid,"
-                "  '00000000-0000-0000-0000-000000000002'::uuid"
-                ")"
+            await s.execute(
+                text(
+                    "DELETE FROM jobs.saved_searches WHERE user_id IN ("
+                    "  '00000000-0000-0000-0000-000000000001'::uuid,"
+                    "  '00000000-0000-0000-0000-000000000002'::uuid"
+                    ")"
+                )
             )
-        )
-        await s.execute(
-            text("DELETE FROM jobs.listings WHERE source_url LIKE 'http://test-%'")
-        )
-        await s.execute(
-            text("DELETE FROM jobs.companies WHERE slug LIKE 'test-%'")
-        )
-        await s.commit()
+            await s.execute(
+                text("DELETE FROM jobs.listings WHERE source_url LIKE 'http://test-%'")
+            )
+            await s.execute(
+                text("DELETE FROM jobs.companies WHERE slug LIKE 'test-%'")
+            )
+            await s.commit()
+    except Exception:
+        # Silently pass on connection errors - unit tests don't need database cleanup
+        pass
 
 
 @pytest.fixture

@@ -1,0 +1,213 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.13.1, pytest-9.0.3, pluggy-1.6.0 -- /Users/prashantnadagoud/windsurf/tracknjob-job-search-service/artifacts/job-search-api/.venv/bin/python3.13
+cachedir: .pytest_cache
+rootdir: /Users/prashantnadagoud/windsurf/tracknjob-job-search-service/artifacts/job-search-api
+configfile: pytest.ini
+plugins: mock-3.15.1, asyncio-1.3.0, anyio-4.13.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_ats_crawlers.py::TestWorkdayCrawler::test_single_page_returns_jobs ERROR [100%]
+tests/test_ats_crawlers.py::TestWorkdayCrawler::test_single_page_returns_jobs ERROR [100%]
+
+==================================== ERRORS ====================================
+______ ERROR at setup of TestWorkdayCrawler.test_single_page_returns_jobs ______
+
+self = <tests.test_ats_crawlers.TestWorkdayCrawler object at 0x1094747d0>
+
+    @pytest.fixture(autouse=True)
+    def mock_db_session(self):
+        self.mock_db = AsyncMock()
+        # Mock fetchone to return a valid config tuple
+        self.mock_db.execute.return_value.fetchone.return_value = ({"instance": "wd5", "career_site_name": "Careers"},)
+    
+        self.mock_session_factory = AsyncMock()
+        self.mock_session_factory.return_value.__aenter__.return_value = self.mock_db
+    
+>       with patch("app.crawler.ats.workday.AsyncSessionFactory", self.mock_session_factory):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_ats_crawlers.py:75: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/homebrew/Cellar/python@3.13/3.13.1/Frameworks/Python.framework/Versions/3.13/lib/python3.13/unittest/mock.py:1495: in __enter__
+    original, local = self.get_original()
+                      ^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <unittest.mock._patch object at 0x1094b0210>
+
+    def get_original(self):
+        target = self.getter()
+        name = self.attribute
+    
+        original = DEFAULT
+        local = False
+    
+        try:
+            original = target.__dict__[name]
+        except (AttributeError, KeyError):
+            original = getattr(target, name, DEFAULT)
+        else:
+            local = True
+    
+        if name in _builtins and isinstance(target, ModuleType):
+            self.create = True
+    
+        if not self.create and original is DEFAULT:
+>           raise AttributeError(
+                "%s does not have the attribute %r" % (target, name)
+            )
+E           AttributeError: <module 'app.crawler.ats.workday' from '/Users/prashantnadagoud/windsurf/tracknjob-job-search-service/artifacts/job-search-api/app/crawler/ats/workday.py'> does not have the attribute 'AsyncSessionFactory'
+
+/opt/homebrew/Cellar/python@3.13/3.13.1/Frameworks/Python.framework/Versions/3.13/lib/python3.13/unittest/mock.py:1465: AttributeError
+____ ERROR at teardown of TestWorkdayCrawler.test_single_page_returns_jobs _____
+
+    def finalizer() -> None:
+        """Yield again, to finalize."""
+    
+        async def async_finalizer() -> None:
+            try:
+                await gen_obj.__anext__()
+            except StopAsyncIteration:
+                pass
+            else:
+                msg = "Async generator fixture didn't stop."
+                msg += "Yield only once."
+                raise ValueError(msg)
+    
+>       runner.run(async_finalizer(), context=context)
+
+.venv/lib/python3.13/site-packages/pytest_asyncio/plugin.py:330: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/homebrew/Cellar/python@3.13/3.13.1/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.13/3.13.1/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/base_events.py:720: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/pytest_asyncio/plugin.py:322: in async_finalizer
+    await gen_obj.__anext__()
+tests/conftest.py:105: in cleanup_test_data
+    await s.execute(
+.venv/lib/python3.13/site-packages/sqlalchemy/ext/asyncio/session.py:449: in execute
+    result = await greenlet_spawn(
+.venv/lib/python3.13/site-packages/sqlalchemy/util/_concurrency_py3k.py:201: in greenlet_spawn
+    result = context.throw(*sys.exc_info())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/orm/session.py:2351: in execute
+    return self._execute_internal(
+.venv/lib/python3.13/site-packages/sqlalchemy/orm/session.py:2239: in _execute_internal
+    conn = self._connection_for_bind(bind)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/orm/session.py:2108: in _connection_for_bind
+    return trans._connection_for_bind(engine, execution_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/orm/state_changes.py:137: in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/orm/session.py:1187: in _connection_for_bind
+    conn = bind.connect()
+           ^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/engine/base.py:3293: in connect
+    return self._connection_cls(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/engine/base.py:143: in __init__
+    self._dbapi_connection = engine.raw_connection()
+                             ^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/engine/base.py:3317: in raw_connection
+    return self.pool.connect()
+           ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/pool/base.py:448: in connect
+    return _ConnectionFairy._checkout(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/pool/base.py:1272: in _checkout
+    fairy = _ConnectionRecord.checkout(pool)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/pool/base.py:712: in checkout
+    rec = pool._do_get()
+          ^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/pool/impl.py:306: in _do_get
+    return self._create_connection()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/pool/base.py:389: in _create_connection
+    return _ConnectionRecord(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/pool/base.py:674: in __init__
+    self.__connect()
+.venv/lib/python3.13/site-packages/sqlalchemy/pool/base.py:900: in __connect
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/util/langhelpers.py:121: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv/lib/python3.13/site-packages/sqlalchemy/pool/base.py:896: in __connect
+    self.dbapi_connection = connection = pool._invoke_creator(self)
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/engine/create.py:667: in connect
+    return dialect.connect(*cargs_tup, **cparams)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/engine/default.py:630: in connect
+    return self.loaded_dbapi.connect(*cargs, **cparams)  # type: ignore[no-any-return]  # NOQA: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:955: in connect
+    await_only(creator_fn(*arg, **kw)),
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/util/_concurrency_py3k.py:132: in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/sqlalchemy/util/_concurrency_py3k.py:196: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/asyncpg/connection.py:2443: in connect
+    return await connect_utils._connect(
+.venv/lib/python3.13/site-packages/asyncpg/connect_utils.py:1249: in _connect
+    raise last_error or exceptions.TargetServerAttributeNotMatched(
+.venv/lib/python3.13/site-packages/asyncpg/connect_utils.py:1218: in _connect
+    conn = await _connect_addr(
+.venv/lib/python3.13/site-packages/asyncpg/connect_utils.py:1054: in _connect_addr
+    return await __connect_addr(params, True, *args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/asyncpg/connect_utils.py:1099: in __connect_addr
+    tr, pr = await connector
+             ^^^^^^^^^^^^^^^
+.venv/lib/python3.13/site-packages/asyncpg/connect_utils.py:969: in _create_ssl_connection
+    tr, pr = await loop.create_connection(
+/opt/homebrew/Cellar/python@3.13/3.13.1/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/base_events.py:1112: in create_connection
+    infos = await self._ensure_resolved(
+/opt/homebrew/Cellar/python@3.13/3.13.1/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/base_events.py:1495: in _ensure_resolved
+    return await loop.getaddrinfo(host, port, family=family, type=type,
+/opt/homebrew/Cellar/python@3.13/3.13.1/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/base_events.py:934: in getaddrinfo
+    return await self.run_in_executor(
+/opt/homebrew/Cellar/python@3.13/3.13.1/Frameworks/Python.framework/Versions/3.13/lib/python3.13/concurrent/futures/thread.py:59: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+host = 'db', port = 5432, family = 0, type = <SocketKind.SOCK_STREAM: 1>
+proto = 0, flags = 0
+
+    def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        """Resolve host and port into list of address info entries.
+    
+        Translate the host/port argument into a sequence of 5-tuples that contain
+        all the necessary arguments for creating a socket connected to that service.
+        host is a domain name, a string representation of an IPv4/v6 address or
+        None. port is a string service name such as 'http', a numeric port number or
+        None. By passing None as the value of host and port, you can pass NULL to
+        the underlying C API.
+    
+        The family, type and proto arguments can be optionally specified in order to
+        narrow the list of addresses returned. Passing zero as a value for each of
+        these arguments selects the full range of results.
+        """
+        # We override this function since we want to translate the numeric family
+        # and socket type values to enum constants.
+        addrlist = []
+>       for res in _socket.getaddrinfo(host, port, family, type, proto, flags):
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       socket.gaierror: [Errno 8] nodename nor servname provided, or not known
+
+/opt/homebrew/Cellar/python@3.13/3.13.1/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socket.py:975: gaierror
+=========================== short test summary info ============================
+ERROR tests/test_ats_crawlers.py::TestWorkdayCrawler::test_single_page_returns_jobs
+ERROR tests/test_ats_crawlers.py::TestWorkdayCrawler::test_single_page_returns_jobs
+============================== 2 errors in 0.33s ===============================
