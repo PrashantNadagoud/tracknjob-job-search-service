@@ -44,8 +44,9 @@ def _slugify(name: str) -> str:
 class SeedOrchestrator:
     """Runs the end-to-end YC discovery and ATS seed pipeline."""
 
-    def __init__(self, db_session: AsyncSession, batch_size: int = 50) -> None:
+    def __init__(self, db_session: AsyncSession, scraper: Any, batch_size: int = 50) -> None:
         self._db = db_session
+        self.scraper = scraper
         self._batch_size = batch_size
 
     async def run(
@@ -66,15 +67,14 @@ class SeedOrchestrator:
 
         logger.info("SeedOrchestrator.run: market=%s dry_run=%s", market, dry_run)
 
-        scraper = YCScraper()
-        companies = await scraper.fetch()
+        companies = await self.scraper.fetch()
 
         if limit is not None:
             companies = companies[:limit]
             logger.info("--limit %d applied; working with %d companies", limit, len(companies))
 
         counts["total"] = len(companies)
-        logger.info("Fetched %d companies from YC", counts["total"])
+        logger.info("Fetched %d companies from scraper", counts["total"])
 
         existing_websites = await self._fetch_existing_websites()
 
@@ -161,12 +161,14 @@ class SeedOrchestrator:
         market: str,
     ) -> None:
         """Insert company, ats_source, and resolved queue row."""
-        name = company["name"]
+        name = company.get("company_name") or company["name"]
         website = company.get("website")
+        source = company.get("source", "yc_directory")
         slug = _slugify(name) if name else match["ats_slug"]
         ats_type = match["ats_type"]
         ats_slug = match["ats_slug"]
         crawl_url = match["crawl_url"]
+        crawl_config = match.get("crawl_config") or {}
 
         company_row = await self._db.execute(
             text("""
@@ -192,13 +194,15 @@ class SeedOrchestrator:
             return
 
         company_id = row[0]
+        
+        import json
 
         await self._db.execute(
             text("""
                 INSERT INTO jobs.ats_sources
-                    (company_id, ats_type, ats_slug, crawl_url, market, discovery_source)
+                    (company_id, ats_type, ats_slug, crawl_url, crawl_config, market, discovery_source)
                 VALUES
-                    (:company_id, :ats_type, :ats_slug, :crawl_url, :market, 'yc_directory')
+                    (:company_id, :ats_type, :ats_slug, :crawl_url, :crawl_config, :market, :source)
                 ON CONFLICT DO NOTHING
             """),
             {
@@ -206,7 +210,9 @@ class SeedOrchestrator:
                 "ats_type": ats_type,
                 "ats_slug": ats_slug,
                 "crawl_url": crawl_url,
+                "crawl_config": json.dumps(crawl_config),
                 "market": market,
+                "source": source,
             },
         )
 
@@ -217,7 +223,7 @@ class SeedOrchestrator:
                      source, market, status, resolved_company_id)
                 VALUES
                     (:name, :website, :ats_type, :ats_slug,
-                     'yc_directory', :market, 'resolved', :company_id)
+                     :source, :market, 'resolved', :company_id)
                 ON CONFLICT DO NOTHING
             """),
             {
@@ -227,6 +233,7 @@ class SeedOrchestrator:
                 "ats_slug": ats_slug,
                 "market": market,
                 "company_id": company_id,
+                "source": source,
             },
         )
 
@@ -236,16 +243,17 @@ class SeedOrchestrator:
         market: str,
     ) -> None:
         """Insert a rejected queue row for a company with no ATS match."""
-        name = company["name"]
+        name = company.get("company_name") or company["name"]
         website = company.get("website")
+        source = company.get("source", "yc_directory")
 
         await self._db.execute(
             text("""
                 INSERT INTO jobs.company_discovery_queue
                     (company_name, website, source, market, status)
                 VALUES
-                    (:name, :website, 'yc_directory', :market, 'rejected')
+                    (:name, :website, :source, :market, 'rejected')
                 ON CONFLICT DO NOTHING
             """),
-            {"name": name, "website": website, "market": market},
+            {"name": name, "website": website, "market": market, "source": source},
         )
