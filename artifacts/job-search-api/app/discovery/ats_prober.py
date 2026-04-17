@@ -324,7 +324,47 @@ async def _probe_pattern(
 
 class ATSProber:
     """Probes a company dict against ATS patterns concurrently."""
-    
+
+    def _extract_career_site_name(self, sitemap_url: str, slug: str) -> str:
+        """
+        Extract career site name from Workday sitemap URL.
+        Falls back to slug if URL is malformed or ambiguous.
+
+        Examples:
+          https://sysco.wd5.myworkdayjobs.com/syscocareers-sitemap.xml  → "syscocareers"
+          https://walmart.wd5.myworkdayjobs.com/en-US/WalmartExternal-sitemap.xml → "WalmartExternal"
+          https://lowes.wd5.myworkdayjobs.com/sitemap.xml  → "lowes" (slug fallback)
+          https://pg.wd5.myworkdayjobs.com:1000/sitemap.xml → "pg" (slug fallback)
+        """
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(sitemap_url)
+
+            # Get path segments, filter out empty strings and locale segments like "en-US"
+            segments = [
+                s for s in parsed.path.strip("/").split("/")
+                if s and not re.match(r'^[a-z]{2}-[A-Z]{2}$', s)
+            ]
+
+            if not segments:
+                return slug
+
+            # Last segment is typically "{career_site_name}-sitemap.xml" or "sitemap.xml"
+            last = segments[-1]
+
+            # Strip sitemap suffix
+            career_site = re.sub(r'-?sitemap\.xml$', '', last, flags=re.IGNORECASE)
+            career_site = re.sub(r'\.xml$', '', career_site, flags=re.IGNORECASE)
+
+            # Reject if result looks like a port, number, or hostname
+            if not career_site or career_site.isdigit() or '.' in career_site:
+                return slug
+
+            return career_site
+
+        except Exception:
+            return slug
+
     async def _probe_workday(self, client: httpx.AsyncClient, base_slug: str, company_sem: asyncio.Semaphore) -> dict[str, Any] | None:
         """
         Workday probe using robots.txt/sitemap approach (most reliable, no CSRF needed).
@@ -369,25 +409,9 @@ class ATSProber:
                                 if not sitemap_url:
                                     # Fallback: try standard sitemap location
                                     sitemap_url = f"{base_url}/sitemap.xml"
-                                
-                                # Extract career_site_name from sitemap URL
-                                # e.g. https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite-sitemap.xml
-                                # or https://walmart.wd5.myworkdayjobs.com/en-US/walmartExternal-sitemap.xml
-                                career_site = "External"  # default
-                                if sitemap_url:
-                                    # Try to extract from URL path
-                                    parts = sitemap_url.rstrip("/").split("/")
-                                    for part in reversed(parts):
-                                        if part and not part.endswith(".xml") and part not in ["en-US", "en-GB", "sitemap"]:
-                                            career_site = part
-                                            break
-                                        elif part.endswith("-sitemap.xml"):
-                                            career_site = part.replace("-sitemap.xml", "")
-                                            break
-                                        elif part == "sitemap.xml" and len(parts) > 1:
-                                            # Use the part before sitemap.xml
-                                            career_site = parts[-2] if parts[-2] not in ["en-US", "en-GB"] else "External"
-                                            break
+
+                                # Extract career_site_name via hardened helper
+                                career_site = self._extract_career_site_name(sitemap_url, slug)
                                 
                                 logger.info(f"Workday probe SUCCESS: {slug} on {instance} -> career_site={career_site}")
                                 

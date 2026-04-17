@@ -65,7 +65,7 @@ class WorkdayCrawler(BaseATSCrawler):
             "Accept-Language": "en-US,en;q=0.5",
         }
         
-        async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0), headers=headers) as client:
             try:
                 resp = await client.get(sitemap_url)
                 resp.raise_for_status()
