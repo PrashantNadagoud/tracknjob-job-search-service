@@ -311,9 +311,23 @@ async def test_seed_orchestrator_skips_known_websites():
 
 
 @pytest.mark.asyncio
-async def test_seed_status_endpoint_shape(async_client):
-    """GET /api/v1/admin/seed-status returns expected top-level keys."""
+async def test_seed_status_endpoint_unauthorized(async_client):
+    """GET /api/v1/admin/seed-status without auth returns 401."""
     resp = await async_client.get("/api/v1/admin/seed-status")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_seed_status_endpoint_forbidden(async_client, auth_headers):
+    """GET /api/v1/admin/seed-status with non-admin auth returns 403."""
+    resp = await async_client.get("/api/v1/admin/seed-status", headers=auth_headers)
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_seed_status_endpoint_shape(async_client, admin_headers):
+    """GET /api/v1/admin/seed-status with admin auth returns expected top-level keys."""
+    resp = await async_client.get("/api/v1/admin/seed-status", headers=admin_headers)
     assert resp.status_code == 200
     body = resp.json()
     assert "discovery_queue" in body
