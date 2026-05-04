@@ -8,18 +8,26 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import get_current_user
+from app.config import get_settings
 from app.db import get_db
 
 router = APIRouter()
 
 
 @router.get("/seed-status", response_model=None)
-async def seed_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+async def seed_status(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
     """Return aggregate stats for the seed pipeline and crawl infrastructure."""
+    settings = get_settings()
+    if not settings.ADMIN_USER_ID or current_user["sub"] != settings.ADMIN_USER_ID:
+        raise HTTPException(status_code=403, detail="Admin access required")
 
     queue_rows = (
         await db.execute(
