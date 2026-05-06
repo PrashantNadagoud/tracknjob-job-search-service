@@ -147,9 +147,7 @@ async def search_jobs(
             limit=limit,
         )
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error occurred", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
 
@@ -318,9 +316,7 @@ async def get_job_sources(
         )
         rows = (await db.execute(stmt)).all()
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error occurred", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return JobSourcesResponse(
@@ -378,9 +374,7 @@ async def upsert_preferences(
         await db.flush()
         record = await db.get(JobPreference, user_uuid)
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error occurred", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return JobPreferencesResponse.model_validate(record)
@@ -403,9 +397,7 @@ async def get_preferences(
     try:
         record = await db.get(JobPreference, user_uuid)
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error occurred", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     if record is None:
@@ -447,9 +439,7 @@ async def create_saved_search(
         await db.flush()
         await db.refresh(record)
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error occurred", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return SavedSearchResponse.model_validate(record)
@@ -477,9 +467,7 @@ async def list_saved_searches(
         )
         rows = (await db.execute(stmt)).scalars().all()
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error occurred", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return SavedSearchListResponse(
@@ -544,9 +532,7 @@ async def hide_job(
         await db.rollback()
         raise HTTPException(status_code=409, detail="Job already hidden")
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error occurred", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return Response(status_code=204)
@@ -617,9 +603,7 @@ async def get_job(
     try:
         row = await db.get(Listing, job_id)
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error occurred", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     if row is None or not row.is_active:
