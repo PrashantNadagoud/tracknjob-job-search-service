@@ -25,7 +25,13 @@ app.use(
     },
   }),
 );
-app.use(cors());
+const allowedOrigin =
+  process.env["TNJ_FRONTEND_URL"] || process.env["FRONTEND_URL"];
+app.use(
+  cors({
+    origin: allowedOrigin ? [allowedOrigin] : false, // Disable CORS if no origin is specified, or default to a safe set if needed
+  }),
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
