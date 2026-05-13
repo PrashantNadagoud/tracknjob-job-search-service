@@ -1,13 +1,15 @@
 """Tests for the Job Alerts & Motivational Email feature (Task #8).
 
 Covers:
-  - POST /api/v1/alerts/subscribe        — create and upsert
-  - GET  /api/v1/alerts/subscription/:id — retrieve
-  - PATCH /api/v1/alerts/subscription/:id — partial update
-  - DELETE /api/v1/alerts/unsubscribe/:id — soft-delete
-  - POST /api/v1/alerts/test-send/:id    — trigger immediate send
+  - POST /api/v1/alerts/subscribe        — create and upsert (auth required)
+  - GET  /api/v1/alerts/subscription/:id — retrieve (auth; own record)
+  - PATCH /api/v1/alerts/subscription/:id — partial update (auth; own record)
+  - DELETE /api/v1/alerts/unsubscribe/:id — soft-delete API (auth; own record)
+  - GET /api/v1/alerts/unsubscribe/:id   — one-click email link (no auth)
+  - POST /api/v1/alerts/test-send/:id    — trigger immediate send (auth; own record)
   - Motivational service static fallback and OpenAI path
   - Celery task query logic
+  - Cross-user access denied (403)
 """
 from __future__ import annotations
 
@@ -20,10 +22,16 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Listing
+from tests.conftest import make_token
 
 ALERT_USER_1 = "test-alert-user-1"
 ALERT_USER_2 = "test-alert-user-2"
 BASE = "/api/v1/alerts"
+
+
+def _auth(user_id: str) -> dict:
+    """Bearer auth header for the given user_id (used as JWT sub)."""
+    return {"Authorization": f"Bearer {make_token(sub=user_id)}"}
 
 
 def _subscribe_payload(**overrides) -> dict:
@@ -44,45 +52,69 @@ def _subscribe_payload(**overrides) -> dict:
 
 class TestSubscribe:
     async def test_subscribe_creates_subscription(self, async_client: AsyncClient):
-        r = await async_client.post(f"{BASE}/subscribe", json=_subscribe_payload())
+        r = await async_client.post(
+            f"{BASE}/subscribe",
+            json=_subscribe_payload(),
+            headers=_auth(ALERT_USER_1),
+        )
         assert r.status_code == 200
         data = r.json()
         assert "subscription_id" in data
         assert data["message"] == "Subscribed successfully"
 
     async def test_subscribe_upserts_on_second_call(self, async_client: AsyncClient):
-        r1 = await async_client.post(f"{BASE}/subscribe", json=_subscribe_payload())
+        r1 = await async_client.post(
+            f"{BASE}/subscribe", json=_subscribe_payload(), headers=_auth(ALERT_USER_1)
+        )
         id1 = r1.json()["subscription_id"]
 
         r2 = await async_client.post(
             f"{BASE}/subscribe",
             json=_subscribe_payload(email="updated@example.com"),
+            headers=_auth(ALERT_USER_1),
         )
         id2 = r2.json()["subscription_id"]
-
         assert id1 == id2
 
     async def test_subscribe_with_minimal_fields(self, async_client: AsyncClient):
         r = await async_client.post(
             f"{BASE}/subscribe",
             json={"user_id": ALERT_USER_2, "email": "min@example.com"},
+            headers=_auth(ALERT_USER_2),
         )
         assert r.status_code == 200
 
     async def test_subscribe_missing_email_returns_422(self, async_client: AsyncClient):
         r = await async_client.post(
-            f"{BASE}/subscribe", json={"user_id": ALERT_USER_1}
+            f"{BASE}/subscribe",
+            json={"user_id": ALERT_USER_1},
+            headers=_auth(ALERT_USER_1),
         )
         assert r.status_code == 422
+
+    async def test_subscribe_without_auth_returns_401(self, async_client: AsyncClient):
+        r = await async_client.post(f"{BASE}/subscribe", json=_subscribe_payload())
+        assert r.status_code == 401
+
+    async def test_subscribe_for_other_user_returns_403(self, async_client: AsyncClient):
+        r = await async_client.post(
+            f"{BASE}/subscribe",
+            json=_subscribe_payload(user_id=ALERT_USER_2),
+            headers=_auth(ALERT_USER_1),
+        )
+        assert r.status_code == 403
 
 
 # ── GET /subscription/{user_id} ───────────────────────────────────────────────
 
 class TestGetSubscription:
     async def test_get_returns_all_fields(self, async_client: AsyncClient):
-        await async_client.post(f"{BASE}/subscribe", json=_subscribe_payload())
-
-        r = await async_client.get(f"{BASE}/subscription/{ALERT_USER_1}")
+        await async_client.post(
+            f"{BASE}/subscribe", json=_subscribe_payload(), headers=_auth(ALERT_USER_1)
+        )
+        r = await async_client.get(
+            f"{BASE}/subscription/{ALERT_USER_1}", headers=_auth(ALERT_USER_1)
+        )
         assert r.status_code == 200
         data = r.json()
         assert data["user_id"] == ALERT_USER_1
@@ -94,19 +126,37 @@ class TestGetSubscription:
         assert "created_at" in data
 
     async def test_get_nonexistent_returns_404(self, async_client: AsyncClient):
-        r = await async_client.get(f"{BASE}/subscription/no-such-user")
+        r = await async_client.get(
+            f"{BASE}/subscription/no-such-user-xyz",
+            headers=_auth("no-such-user-xyz"),
+        )
         assert r.status_code == 404
+
+    async def test_get_other_user_subscription_returns_403(self, async_client: AsyncClient):
+        await async_client.post(
+            f"{BASE}/subscribe", json=_subscribe_payload(), headers=_auth(ALERT_USER_1)
+        )
+        r = await async_client.get(
+            f"{BASE}/subscription/{ALERT_USER_1}", headers=_auth(ALERT_USER_2)
+        )
+        assert r.status_code == 403
+
+    async def test_get_without_auth_returns_401(self, async_client: AsyncClient):
+        r = await async_client.get(f"{BASE}/subscription/{ALERT_USER_1}")
+        assert r.status_code == 401
 
 
 # ── PATCH /subscription/{user_id} ────────────────────────────────────────────
 
 class TestPatchSubscription:
     async def test_patch_updates_keywords_and_hour(self, async_client: AsyncClient):
-        await async_client.post(f"{BASE}/subscribe", json=_subscribe_payload())
-
+        await async_client.post(
+            f"{BASE}/subscribe", json=_subscribe_payload(), headers=_auth(ALERT_USER_1)
+        )
         r = await async_client.patch(
             f"{BASE}/subscription/{ALERT_USER_1}",
             json={"keywords": ["django", "postgres"], "delivery_time_utc": 14},
+            headers=_auth(ALERT_USER_1),
         )
         assert r.status_code == 200
         data = r.json()
@@ -115,40 +165,118 @@ class TestPatchSubscription:
 
     async def test_patch_nonexistent_returns_404(self, async_client: AsyncClient):
         r = await async_client.patch(
-            f"{BASE}/subscription/ghost-user", json={"delivery_time_utc": 10}
+            f"{BASE}/subscription/ghost-user-zzz",
+            json={"delivery_time_utc": 10},
+            headers=_auth("ghost-user-zzz"),
         )
         assert r.status_code == 404
 
     async def test_patch_empty_body_returns_current_state(self, async_client: AsyncClient):
-        await async_client.post(f"{BASE}/subscribe", json=_subscribe_payload())
-        r = await async_client.patch(f"{BASE}/subscription/{ALERT_USER_1}", json={})
+        await async_client.post(
+            f"{BASE}/subscribe", json=_subscribe_payload(), headers=_auth(ALERT_USER_1)
+        )
+        r = await async_client.patch(
+            f"{BASE}/subscription/{ALERT_USER_1}",
+            json={},
+            headers=_auth(ALERT_USER_1),
+        )
         assert r.status_code == 200
         assert r.json()["delivery_time_utc"] == 9
+
+    async def test_patch_other_user_returns_403(self, async_client: AsyncClient):
+        await async_client.post(
+            f"{BASE}/subscribe", json=_subscribe_payload(), headers=_auth(ALERT_USER_1)
+        )
+        r = await async_client.patch(
+            f"{BASE}/subscription/{ALERT_USER_1}",
+            json={"delivery_time_utc": 7},
+            headers=_auth(ALERT_USER_2),
+        )
+        assert r.status_code == 403
 
 
 # ── DELETE /unsubscribe/{user_id} ─────────────────────────────────────────────
 
-class TestUnsubscribe:
+class TestUnsubscribeApi:
     async def test_unsubscribe_sets_is_active_false(self, async_client: AsyncClient):
-        await async_client.post(f"{BASE}/subscribe", json=_subscribe_payload())
-
-        r = await async_client.delete(f"{BASE}/unsubscribe/{ALERT_USER_1}")
+        await async_client.post(
+            f"{BASE}/subscribe", json=_subscribe_payload(), headers=_auth(ALERT_USER_1)
+        )
+        r = await async_client.delete(
+            f"{BASE}/unsubscribe/{ALERT_USER_1}", headers=_auth(ALERT_USER_1)
+        )
         assert r.status_code == 200
 
-        get_r = await async_client.get(f"{BASE}/subscription/{ALERT_USER_1}")
+        get_r = await async_client.get(
+            f"{BASE}/subscription/{ALERT_USER_1}", headers=_auth(ALERT_USER_1)
+        )
         assert get_r.json()["is_active"] is False
 
     async def test_resubscribe_reactivates(self, async_client: AsyncClient):
-        await async_client.post(f"{BASE}/subscribe", json=_subscribe_payload())
-        await async_client.delete(f"{BASE}/unsubscribe/{ALERT_USER_1}")
-        await async_client.post(f"{BASE}/subscribe", json=_subscribe_payload())
-
-        get_r = await async_client.get(f"{BASE}/subscription/{ALERT_USER_1}")
+        await async_client.post(
+            f"{BASE}/subscribe", json=_subscribe_payload(), headers=_auth(ALERT_USER_1)
+        )
+        await async_client.delete(
+            f"{BASE}/unsubscribe/{ALERT_USER_1}", headers=_auth(ALERT_USER_1)
+        )
+        await async_client.post(
+            f"{BASE}/subscribe", json=_subscribe_payload(), headers=_auth(ALERT_USER_1)
+        )
+        get_r = await async_client.get(
+            f"{BASE}/subscription/{ALERT_USER_1}", headers=_auth(ALERT_USER_1)
+        )
         assert get_r.json()["is_active"] is True
 
     async def test_unsubscribe_nonexistent_returns_404(self, async_client: AsyncClient):
-        r = await async_client.delete(f"{BASE}/unsubscribe/nobody")
+        r = await async_client.delete(
+            f"{BASE}/unsubscribe/nobody-zzz", headers=_auth("nobody-zzz")
+        )
         assert r.status_code == 404
+
+    async def test_unsubscribe_other_user_returns_403(self, async_client: AsyncClient):
+        await async_client.post(
+            f"{BASE}/subscribe", json=_subscribe_payload(), headers=_auth(ALERT_USER_1)
+        )
+        r = await async_client.delete(
+            f"{BASE}/unsubscribe/{ALERT_USER_1}", headers=_auth(ALERT_USER_2)
+        )
+        assert r.status_code == 403
+
+
+# ── GET /unsubscribe/{user_id} (one-click email link) ─────────────────────────
+
+class TestUnsubscribeEmailLink:
+    async def test_email_link_unsubscribes_without_auth(self, async_client: AsyncClient):
+        await async_client.post(
+            f"{BASE}/subscribe", json=_subscribe_payload(), headers=_auth(ALERT_USER_1)
+        )
+        r = await async_client.get(f"{BASE}/unsubscribe/{ALERT_USER_1}")
+        assert r.status_code == 200
+        assert "text/html" in r.headers["content-type"]
+        assert "unsubscribed" in r.text.lower()
+
+        get_r = await async_client.get(
+            f"{BASE}/subscription/{ALERT_USER_1}", headers=_auth(ALERT_USER_1)
+        )
+        assert get_r.json()["is_active"] is False
+
+    async def test_email_link_for_nonexistent_user_returns_200_html(
+        self, async_client: AsyncClient
+    ):
+        r = await async_client.get(f"{BASE}/unsubscribe/never-existed-xyz")
+        assert r.status_code == 200
+        assert "text/html" in r.headers["content-type"]
+
+    async def test_email_link_already_unsubscribed_returns_200(
+        self, async_client: AsyncClient
+    ):
+        await async_client.post(
+            f"{BASE}/subscribe", json=_subscribe_payload(), headers=_auth(ALERT_USER_1)
+        )
+        await async_client.get(f"{BASE}/unsubscribe/{ALERT_USER_1}")
+        r = await async_client.get(f"{BASE}/unsubscribe/{ALERT_USER_1}")
+        assert r.status_code == 200
+        assert "already" in r.text.lower()
 
 
 # ── POST /test-send/{user_id} ─────────────────────────────────────────────────
@@ -158,15 +286,32 @@ class TestTestSend:
         await async_client.post(
             f"{BASE}/subscribe",
             json=_subscribe_payload(keywords=["zzzz-nonexistent-role-xyzzy-9999"]),
+            headers=_auth(ALERT_USER_1),
         )
-        r = await async_client.post(f"{BASE}/test-send/{ALERT_USER_1}")
+        r = await async_client.post(
+            f"{BASE}/test-send/{ALERT_USER_1}", headers=_auth(ALERT_USER_1)
+        )
         assert r.status_code == 200
-        data = r.json()
-        assert data["jobs_found"] == 0
+        assert r.json()["jobs_found"] == 0
 
     async def test_test_send_nonexistent_user_returns_404(self, async_client: AsyncClient):
-        r = await async_client.post(f"{BASE}/test-send/ghost-user-xyz")
+        r = await async_client.post(
+            f"{BASE}/test-send/ghost-user-xyz", headers=_auth("ghost-user-xyz")
+        )
         assert r.status_code == 404
+
+    async def test_test_send_other_user_returns_403(self, async_client: AsyncClient):
+        await async_client.post(
+            f"{BASE}/subscribe", json=_subscribe_payload(), headers=_auth(ALERT_USER_1)
+        )
+        r = await async_client.post(
+            f"{BASE}/test-send/{ALERT_USER_1}", headers=_auth(ALERT_USER_2)
+        )
+        assert r.status_code == 403
+
+    async def test_test_send_without_auth_returns_401(self, async_client: AsyncClient):
+        r = await async_client.post(f"{BASE}/test-send/{ALERT_USER_1}")
+        assert r.status_code == 401
 
     async def test_test_send_calls_render_and_send_when_jobs_exist(
         self, async_client: AsyncClient, db_session: AsyncSession
@@ -189,11 +334,14 @@ class TestTestSend:
         await async_client.post(
             f"{BASE}/subscribe",
             json=_subscribe_payload(keywords=["Python Engineer Unique"]),
+            headers=_auth(ALERT_USER_1),
         )
 
         with patch("app.alert_tasks._render_and_send", new_callable=AsyncMock) as mock_send:
             mock_send.return_value = {"status": "sent", "resend_message_id": "msg-abc"}
-            r = await async_client.post(f"{BASE}/test-send/{ALERT_USER_1}")
+            r = await async_client.post(
+                f"{BASE}/test-send/{ALERT_USER_1}", headers=_auth(ALERT_USER_1)
+            )
 
         assert r.status_code == 200
         assert r.json()["jobs_found"] >= 1

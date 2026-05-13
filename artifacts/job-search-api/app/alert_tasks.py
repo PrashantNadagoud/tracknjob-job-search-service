@@ -137,6 +137,9 @@ async def _render_and_send(sub, jobs: list[dict[str, Any]]) -> dict[str, Any]:
     from app.config import get_settings
     settings = get_settings()
     frontend_url = settings.TNJ_FRONTEND_URL
+    # The API base URL is derived from the frontend URL host; fall back to a
+    # relative path so links in the email point to the correct service.
+    api_base_url = os.environ.get("API_BASE_URL", frontend_url.rstrip("/"))
 
     html_body = template.render(
         name=sub.name or "there",
@@ -146,6 +149,7 @@ async def _render_and_send(sub, jobs: list[dict[str, Any]]) -> dict[str, Any]:
         locations=list(sub.locations or []),
         user_id=sub.user_id,
         frontend_url=frontend_url,
+        api_base_url=api_base_url,
     )
 
     subject = f"☀️ {len(jobs)} new job{'s' if len(jobs) != 1 else ''} for you today, {sub.name or 'there'}"
