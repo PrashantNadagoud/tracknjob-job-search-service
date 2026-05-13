@@ -358,3 +358,79 @@ class JobPreference(Base):
     updated_at: Mapped[TIMESTAMP | None] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=True
     )
+
+
+# ── Alert subscription tables (migration 0009) ──────────────────────────────
+
+
+class AlertSubscription(Base):
+    """Per-user job alert subscription with keyword/location/type filters."""
+
+    __tablename__ = "alert_subscriptions"
+    __table_args__ = (
+        sa.UniqueConstraint("user_id", name="uq_alert_subscription_user"),
+        Index("idx_alert_subscriptions_user", "user_id"),
+        Index(
+            "idx_alert_subscriptions_active",
+            "delivery_time_utc",
+            postgresql_where=sa.text("is_active = true"),
+        ),
+        {"schema": "jobs"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    user_id: Mapped[str] = mapped_column(sa.String, nullable=False)
+    email: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    name: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default="true", nullable=False)
+    keywords: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    locations: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    employment_types: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    ats_types: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    job_search_started_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    motivational_email_enabled: Mapped[bool] = mapped_column(
+        Boolean, server_default="true", nullable=False
+    )
+    delivery_time_utc: Mapped[int] = mapped_column(
+        Integer, server_default="13", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AlertDelivery(Base):
+    """Tracks every alert email send attempt for a subscription."""
+
+    __tablename__ = "alert_deliveries"
+    __table_args__ = (
+        Index("idx_alert_deliveries_sub", "subscription_id", sa.text("delivered_at DESC")),
+        {"schema": "jobs"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        sa.ForeignKey("jobs.alert_subscriptions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    delivered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    jobs_sent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(sa.String(50), nullable=False)
+    resend_message_id: Mapped[str | None] = mapped_column(sa.String, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

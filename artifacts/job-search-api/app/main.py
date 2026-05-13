@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1.admin import router as admin_router
+from app.api.v1.alerts import router as alerts_router
 from app.api.v1.companies import router as companies_router
 from app.api.v1.jobs import router as jobs_router
 from app.auth import _UnauthorizedError
@@ -103,6 +104,7 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
 app.include_router(jobs_router, prefix="/api/v1/jobs", tags=["jobs"])
 app.include_router(companies_router, prefix="/api/v1/companies", tags=["companies"])
 app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
+app.include_router(alerts_router, prefix="/api/v1/alerts", tags=["alerts"])
 
 
 @app.get("/health", tags=["health"])

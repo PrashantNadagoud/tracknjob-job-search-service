@@ -27,6 +27,11 @@ beat_schedule = {
         "task": "app.enrichment.tasks.reenrich_stale_companies",
         "schedule": crontab(minute=0, hour=3, day_of_week="sunday"),
     },
+    # Job alerts — runs every hour, self-filters per delivery_time_utc per subscription
+    "send-daily-alerts": {
+        "task": "app.alert_tasks.send_daily_alerts",
+        "schedule": crontab(minute=0),
+    },
 }
 
 # Note: crawl_all_companies is retained as a fallback / manually-triggered task

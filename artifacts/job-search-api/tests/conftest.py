@@ -132,6 +132,16 @@ async def cleanup_test_data():
         await s.execute(
             text("DELETE FROM jobs.companies WHERE slug LIKE 'test-%'")
         )
+        await s.execute(
+            text(
+                "DELETE FROM jobs.alert_subscriptions WHERE user_id IN ("
+                "  '00000000-0000-0000-0000-000000000001',"
+                "  '00000000-0000-0000-0000-000000000002',"
+                "  'test-alert-user-1',"
+                "  'test-alert-user-2'"
+                ")"
+            )
+        )
         await s.commit()
 
 
