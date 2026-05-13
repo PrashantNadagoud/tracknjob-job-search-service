@@ -71,6 +71,7 @@ async def run(dry_run: bool) -> None:
     inserted = 0
     updated = 0
     skipped = 0
+    would_upsert = 0  # used only in dry-run (can't distinguish insert vs update without DB query)
 
     async with AsyncSessionFactory() as db:
         for rec in records:
@@ -102,7 +103,7 @@ async def run(dry_run: bool) -> None:
                     f"  WOULD UPSERT: {company_name!r} | "
                     f"ats_type={ats_type} slug={ats_slug} country={country}{config_info}"
                 )
-                inserted += 1
+                would_upsert += 1
                 continue
 
             company_row = (await db.execute(
@@ -176,9 +177,14 @@ async def run(dry_run: bool) -> None:
         if not dry_run:
             await db.commit()
 
-    print(
-        f"\nIndia sources: {inserted} inserted | {updated} updated | {skipped} skipped (custom/null)"
-    )
+    if dry_run:
+        print(
+            f"\nIndia sources (dry-run): {would_upsert} would-upsert | {skipped} skipped (custom/null)"
+        )
+    else:
+        print(
+            f"\nIndia sources: {inserted} inserted | {updated} updated | {skipped} skipped (custom/null)"
+        )
 
 
 def main() -> None:

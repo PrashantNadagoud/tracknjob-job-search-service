@@ -90,7 +90,6 @@ def _try_workday_cxs(
     }
     try:
         resp = httpx.post(url, json=body, headers=headers, timeout=_TIMEOUT)
-        time.sleep(1)
         if resp.status_code == 200:
             data = resp.json()
             if data.get("jobPostings") is not None:
@@ -101,6 +100,7 @@ def _try_workday_cxs(
                     "Workday %s validated: %s/%s (%d postings)",
                     slug, instance, site_name, len(data["jobPostings"]),
                 )
+                time.sleep(1)
                 return {
                     "active": True,
                     "career_site_url": career_url,
@@ -108,6 +108,7 @@ def _try_workday_cxs(
                 }
     except Exception as exc:
         logger.debug("Workday CXS probe %s/%s/%s failed: %s", slug, instance, site_name, exc)
+    # One sleep per attempt on all non-success paths (non-200, no postings, exception).
     time.sleep(1)
     return None
 
@@ -143,13 +144,13 @@ def _probe_greenhouse_sync(slug: str) -> dict[str, Any]:
     url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
     try:
         resp = httpx.get(url, timeout=_TIMEOUT)
-        time.sleep(1)
         if resp.status_code == 200:
             data = resp.json()
             if isinstance(data.get("jobs"), list):
                 logger.info(
                     "Greenhouse %s validated: %d jobs", slug, len(data["jobs"])
                 )
+                time.sleep(1)
                 return {
                     "active": True,
                     "career_site_url": f"https://boards.greenhouse.io/{slug}",
@@ -166,11 +167,11 @@ def _probe_lever_sync(slug: str) -> dict[str, Any]:
     url = f"https://api.lever.co/v0/postings/{slug}"
     try:
         resp = httpx.get(url, timeout=_TIMEOUT)
-        time.sleep(1)
         if resp.status_code == 200:
             data = resp.json()
             if isinstance(data, list):
                 logger.info("Lever %s validated: %d postings", slug, len(data))
+                time.sleep(1)
                 return {
                     "active": True,
                     "career_site_url": f"https://jobs.lever.co/{slug}",
