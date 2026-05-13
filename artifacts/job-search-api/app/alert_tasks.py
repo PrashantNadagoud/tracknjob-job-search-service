@@ -176,6 +176,158 @@ async def _render_and_send(sub, jobs: list[dict[str, Any]]) -> dict[str, Any]:
 
 _DELIVERY_RETENTION_DAYS = 90
 
+_MAX_ALERT_RETRIES = 3   # Total send attempts (1 initial + 2 retries)
+_RETRY_BASE_MINUTES = 5  # Backoff base: attempt n waits 2^(n-1) * base minutes
+
+
+@celery_app.task(bind=True, max_retries=0, name="app.alert_tasks.retry_failed_deliveries")
+def retry_failed_deliveries(self) -> dict[str, int]:
+    """Re-attempt 'failed' alert deliveries from today with exponential backoff.
+
+    Runs every 5 minutes via Beat.  Only retries within the same UTC calendar
+    day so a next-day double-send is impossible.  Backoff schedule (base=5 min):
+        attempt 1 → wait  5 min  (2^0 * base)
+        attempt 2 → wait 10 min  (2^1 * base)
+    A subscription is skipped once it has accumulated _MAX_ALERT_RETRIES
+    'failed' rows today (total attempts, including the initial send_daily_alerts
+    attempt).
+    """
+    return asyncio.run(_async_retry_failed_deliveries())
+
+
+async def _async_retry_failed_deliveries() -> dict[str, int]:
+    from app.config import get_settings
+    settings = get_settings()
+    if not settings.ALERTS_ENABLED:
+        logger.info("ALERTS_ENABLED=false; skipping retry_failed_deliveries")
+        return {"processed": 0, "retried": 0, "sent": 0, "skipped": 0, "failed": 0}
+
+    Session = _make_session()
+    counts = {"processed": 0, "retried": 0, "sent": 0, "skipped": 0, "failed": 0}
+
+    async with Session() as db:
+        # Pick up subscriptions that:
+        #  - have at least one 'failed' delivery row today (UTC)
+        #  - have NO 'sent' or 'skipped_no_matches' row today
+        #  - have fewer than _MAX_ALERT_RETRIES failed rows today (still worth retrying)
+        #  - the most recent failure is old enough for this retry attempt
+        #      next_retry_at = last_failed_at + 2^(fail_count-1) * base_minutes
+        rows = (await db.execute(
+            text("""
+                SELECT s.*, COUNT(d.id) AS fail_count
+                FROM jobs.alert_subscriptions s
+                INNER JOIN jobs.alert_deliveries d
+                    ON d.subscription_id = s.id
+                    AND d.delivered_at >= timezone('UTC', now())::date
+                    AND d.status = 'failed'
+                WHERE s.is_active = true
+                  AND NOT EXISTS (
+                      SELECT 1 FROM jobs.alert_deliveries d2
+                      WHERE d2.subscription_id = s.id
+                        AND d2.delivered_at >= timezone('UTC', now())::date
+                        AND d2.status IN ('sent', 'skipped_no_matches')
+                  )
+                GROUP BY s.id
+                HAVING COUNT(d.id) < :max_retries
+                   AND MAX(d.delivered_at)
+                       + POWER(2, COUNT(d.id) - 1) * :base_minutes * interval '1 minute'
+                       <= now()
+            """),
+            {"max_retries": _MAX_ALERT_RETRIES, "base_minutes": _RETRY_BASE_MINUTES},
+        )).fetchall()
+
+        logger.info(
+            "retry_failed_deliveries: %d subscription(s) eligible for retry", len(rows)
+        )
+
+        for sub in rows:
+            counts["processed"] += 1
+            try:
+                jobs = await _query_matching_jobs(sub, db)
+
+                if not jobs:
+                    # No matching jobs — record a skipped row so retries stop naturally.
+                    await db.execute(
+                        text("""
+                            INSERT INTO jobs.alert_deliveries
+                                (subscription_id, jobs_sent, status)
+                            VALUES (:sid, 0, 'skipped_no_matches')
+                        """),
+                        {"sid": sub.id},
+                    )
+                    await db.commit()
+                    counts["skipped"] += 1
+                    logger.info("Retry skipped %s (no matches)", sub.user_id)
+                    continue
+
+                # Claim the delivery slot atomically — same pattern as send_daily_alerts.
+                # The unique partial index (WHERE status='sent') prevents duplicate claims.
+                try:
+                    claim = await db.execute(
+                        text("""
+                            INSERT INTO jobs.alert_deliveries
+                                (subscription_id, jobs_sent, status)
+                            VALUES (:sid, 0, 'sent')
+                            RETURNING id
+                        """),
+                        {"sid": sub.id},
+                    )
+                    delivery_id = claim.scalar_one()
+                    await db.commit()
+                except IntegrityError:
+                    await db.rollback()
+                    logger.warning(
+                        "Retry claim lost for subscription %s (concurrent worker race)",
+                        sub.id,
+                    )
+                    counts["skipped"] += 1
+                    continue
+
+                counts["retried"] += 1
+                result = await _render_and_send(sub, jobs)
+
+                await db.execute(
+                    text("""
+                        UPDATE jobs.alert_deliveries
+                        SET jobs_sent          = :cnt,
+                            status             = :status,
+                            resend_message_id  = :mid,
+                            error_message      = :err
+                        WHERE id = :delivery_id
+                    """),
+                    {
+                        "delivery_id": delivery_id,
+                        "cnt": len(jobs),
+                        "status": result["status"],
+                        "mid": result.get("resend_message_id"),
+                        "err": result.get("error_message"),
+                    },
+                )
+                await db.commit()
+
+                if result["status"] == "sent":
+                    counts["sent"] += 1
+                    logger.info(
+                        "Retry sent alert to %s (%d jobs)", sub.email, len(jobs)
+                    )
+                else:
+                    counts["failed"] += 1
+                    logger.warning(
+                        "Retry attempt still failed for %s: %s",
+                        sub.email,
+                        result.get("error_message"),
+                    )
+
+            except Exception as exc:
+                logger.exception(
+                    "Unexpected error during retry for subscription %s: %s", sub.id, exc
+                )
+                counts["failed"] += 1
+                await db.rollback()
+
+    logger.info("retry_failed_deliveries complete: %s", counts)
+    return counts
+
 
 @celery_app.task(bind=True, max_retries=0, name="app.alert_tasks.prune_old_deliveries")
 def prune_old_deliveries(self) -> dict[str, int]:

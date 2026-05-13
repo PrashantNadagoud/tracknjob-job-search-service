@@ -36,6 +36,12 @@ beat_schedule = {
         "task": "app.alert_tasks.send_daily_alerts",
         "schedule": crontab(minute=0),
     },
+    # Retry — re-attempt today's failed deliveries with exponential backoff
+    # Runs every 5 minutes so it can honour the short first-retry window (5 min).
+    "retry-failed-deliveries-every-5-minutes": {
+        "task": "app.alert_tasks.retry_failed_deliveries",
+        "schedule": crontab(minute="*/5"),
+    },
     # Retention — delete alert_deliveries rows older than 90 days
     "prune-old-deliveries-nightly": {
         "task": "app.alert_tasks.prune_old_deliveries",

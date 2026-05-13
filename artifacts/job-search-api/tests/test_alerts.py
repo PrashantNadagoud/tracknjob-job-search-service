@@ -634,6 +634,296 @@ class TestAlertTaskLogic:
         mock_db.commit.assert_called_once()
 
 
+# ── Retry failed deliveries ───────────────────────────────────────────────────
+
+class TestRetryFailedDeliveries:
+    """Tests for _async_retry_failed_deliveries and the Beat schedule entry."""
+
+    def test_beat_schedule_has_retry_entry(self):
+        from app.celery_config import beat_schedule
+        assert "retry-failed-deliveries-every-5-minutes" in beat_schedule, (
+            "retry-failed-deliveries-every-5-minutes Beat entry must be present"
+        )
+        assert beat_schedule["retry-failed-deliveries-every-5-minutes"]["task"] == (
+            "app.alert_tasks.retry_failed_deliveries"
+        )
+
+    async def test_retry_returns_zeros_when_alerts_disabled(self):
+        from app.alert_tasks import _async_retry_failed_deliveries
+        with patch("app.config.get_settings") as mock_settings:
+            settings_obj = MagicMock()
+            settings_obj.ALERTS_ENABLED = False
+            mock_settings.return_value = settings_obj
+            result = await _async_retry_failed_deliveries()
+        assert result["processed"] == 0
+        assert result["retried"] == 0
+        assert result["sent"] == 0
+
+    async def test_retry_sends_when_previous_attempt_failed(self, db_session: AsyncSession):
+        """A subscription with one 'failed' row old enough for backoff is retried and sent."""
+        from datetime import timedelta
+        from unittest.mock import AsyncMock, patch, MagicMock
+        from tests.conftest import _TestSession
+        from app.alert_tasks import _async_retry_failed_deliveries, _RETRY_BASE_MINUTES
+
+        sub_id_result = await db_session.execute(
+            text("""
+                INSERT INTO jobs.alert_subscriptions
+                    (user_id, email, name, is_active, delivery_time_utc, keywords)
+                VALUES (:uid, :email, 'Retry User', true, 9, ARRAY['python'])
+                ON CONFLICT (user_id) DO UPDATE SET email = EXCLUDED.email
+                RETURNING id
+            """),
+            {"uid": "retry-test-user-1", "email": "retry1@example.com"},
+        )
+        sub_id = sub_id_result.scalar_one()
+        await db_session.commit()
+
+        # Set delivered_at to 2× the base interval ago so the backoff window is satisfied.
+        old_enough = datetime.now(timezone.utc) - timedelta(minutes=_RETRY_BASE_MINUTES * 2)
+        await db_session.execute(
+            text("""
+                INSERT INTO jobs.alert_deliveries
+                    (subscription_id, delivered_at, jobs_sent, status, error_message)
+                VALUES (:sid, :ts, 0, 'failed', 'Resend API timeout')
+            """),
+            {"sid": str(sub_id), "ts": old_enough},
+        )
+        await db_session.commit()
+
+        mock_jobs = [
+            {"id": "1", "title": "Python Dev", "company": "Co",
+             "location": "Remote", "employment_type": None, "source_url": "http://x.com"}
+        ]
+
+        with patch("app.alert_tasks._make_session", return_value=_TestSession), \
+             patch("app.alert_tasks._query_matching_jobs", new_callable=AsyncMock) as mock_qj, \
+             patch("app.alert_tasks._render_and_send", new_callable=AsyncMock) as mock_send:
+            mock_qj.return_value = mock_jobs
+            mock_send.return_value = {"status": "sent", "resend_message_id": "msg-retry-1"}
+            result = await _async_retry_failed_deliveries()
+
+        assert result["processed"] == 1
+        assert result["retried"] == 1
+        assert result["sent"] == 1
+        assert result["failed"] == 0
+        mock_send.assert_called_once()
+
+        rows = (await db_session.execute(
+            text("""
+                SELECT status FROM jobs.alert_deliveries
+                WHERE subscription_id = :sid
+                ORDER BY delivered_at
+            """),
+            {"sid": str(sub_id)},
+        )).fetchall()
+        statuses = [r.status for r in rows]
+        assert "failed" in statuses
+        assert "sent" in statuses
+
+        await db_session.execute(
+            text("DELETE FROM jobs.alert_subscriptions WHERE user_id = 'retry-test-user-1'")
+        )
+        await db_session.commit()
+
+    async def test_retry_gives_up_after_max_retries(self, db_session: AsyncSession):
+        """A subscription with _MAX_ALERT_RETRIES failed rows today is not retried again."""
+        from datetime import timedelta
+        from unittest.mock import AsyncMock, patch, MagicMock
+        from tests.conftest import _TestSession
+        from app.alert_tasks import _async_retry_failed_deliveries, _MAX_ALERT_RETRIES, _RETRY_BASE_MINUTES
+
+        sub_id_result = await db_session.execute(
+            text("""
+                INSERT INTO jobs.alert_subscriptions
+                    (user_id, email, name, is_active, delivery_time_utc, keywords)
+                VALUES (:uid, :email, 'Retry User 2', true, 9, ARRAY['python'])
+                ON CONFLICT (user_id) DO UPDATE SET email = EXCLUDED.email
+                RETURNING id
+            """),
+            {"uid": "retry-test-user-2", "email": "retry2@example.com"},
+        )
+        sub_id = sub_id_result.scalar_one()
+        await db_session.commit()
+
+        old_enough = datetime.now(timezone.utc) - timedelta(minutes=_RETRY_BASE_MINUTES * 4)
+        for _ in range(_MAX_ALERT_RETRIES):
+            await db_session.execute(
+                text("""
+                    INSERT INTO jobs.alert_deliveries
+                        (subscription_id, delivered_at, jobs_sent, status, error_message)
+                    VALUES (:sid, :ts, 0, 'failed', 'transient error')
+                """),
+                {"sid": str(sub_id), "ts": old_enough},
+            )
+        await db_session.commit()
+
+        with patch("app.alert_tasks._make_session", return_value=_TestSession), \
+             patch("app.alert_tasks._render_and_send", new_callable=AsyncMock) as mock_send:
+            result = await _async_retry_failed_deliveries()
+
+        assert result["processed"] == 0, (
+            "Subscription with max failed rows must not be picked up for retry"
+        )
+        mock_send.assert_not_called()
+
+        await db_session.execute(
+            text("DELETE FROM jobs.alert_subscriptions WHERE user_id = 'retry-test-user-2'")
+        )
+        await db_session.commit()
+
+    async def test_retry_waits_when_backoff_not_elapsed(self, db_session: AsyncSession):
+        """A subscription whose most recent failure is too recent is not retried yet."""
+        from unittest.mock import AsyncMock, patch
+        from tests.conftest import _TestSession
+        from app.alert_tasks import _async_retry_failed_deliveries
+
+        sub_id_result = await db_session.execute(
+            text("""
+                INSERT INTO jobs.alert_subscriptions
+                    (user_id, email, name, is_active, delivery_time_utc, keywords)
+                VALUES (:uid, :email, 'Retry User 3', true, 9, ARRAY['python'])
+                ON CONFLICT (user_id) DO UPDATE SET email = EXCLUDED.email
+                RETURNING id
+            """),
+            {"uid": "retry-test-user-3", "email": "retry3@example.com"},
+        )
+        sub_id = sub_id_result.scalar_one()
+        await db_session.commit()
+
+        # delivered_at = now() (0 seconds ago) — well inside the 5-minute backoff window
+        await db_session.execute(
+            text("""
+                INSERT INTO jobs.alert_deliveries
+                    (subscription_id, delivered_at, jobs_sent, status, error_message)
+                VALUES (:sid, now(), 0, 'failed', 'transient error')
+            """),
+            {"sid": str(sub_id)},
+        )
+        await db_session.commit()
+
+        with patch("app.alert_tasks._make_session", return_value=_TestSession), \
+             patch("app.alert_tasks._render_and_send", new_callable=AsyncMock) as mock_send:
+            result = await _async_retry_failed_deliveries()
+
+        assert result["processed"] == 0, (
+            "Subscription failed just now must not be retried before backoff elapses"
+        )
+        mock_send.assert_not_called()
+
+        await db_session.execute(
+            text("DELETE FROM jobs.alert_subscriptions WHERE user_id = 'retry-test-user-3'")
+        )
+        await db_session.commit()
+
+    async def test_retry_skips_when_no_matching_jobs(self, db_session: AsyncSession):
+        """If no jobs match during retry, inserts skipped_no_matches and stops retrying."""
+        from datetime import timedelta
+        from unittest.mock import AsyncMock, patch
+        from tests.conftest import _TestSession
+        from app.alert_tasks import _async_retry_failed_deliveries, _RETRY_BASE_MINUTES
+
+        sub_id_result = await db_session.execute(
+            text("""
+                INSERT INTO jobs.alert_subscriptions
+                    (user_id, email, name, is_active, delivery_time_utc, keywords)
+                VALUES (:uid, :email, 'Retry User 4', true, 9, ARRAY['zzz-nomatches'])
+                ON CONFLICT (user_id) DO UPDATE SET email = EXCLUDED.email
+                RETURNING id
+            """),
+            {"uid": "retry-test-user-4", "email": "retry4@example.com"},
+        )
+        sub_id = sub_id_result.scalar_one()
+        await db_session.commit()
+
+        old_enough = datetime.now(timezone.utc) - timedelta(minutes=_RETRY_BASE_MINUTES * 2)
+        await db_session.execute(
+            text("""
+                INSERT INTO jobs.alert_deliveries
+                    (subscription_id, delivered_at, jobs_sent, status, error_message)
+                VALUES (:sid, :ts, 0, 'failed', 'transient error')
+            """),
+            {"sid": str(sub_id), "ts": old_enough},
+        )
+        await db_session.commit()
+
+        with patch("app.alert_tasks._make_session", return_value=_TestSession), \
+             patch("app.alert_tasks._query_matching_jobs", new_callable=AsyncMock) as mock_qj, \
+             patch("app.alert_tasks._render_and_send", new_callable=AsyncMock) as mock_send:
+            mock_qj.return_value = []
+            result = await _async_retry_failed_deliveries()
+
+        assert result["processed"] == 1
+        assert result["skipped"] == 1
+        mock_send.assert_not_called()
+
+        rows = (await db_session.execute(
+            text("""
+                SELECT status FROM jobs.alert_deliveries
+                WHERE subscription_id = :sid
+            """),
+            {"sid": str(sub_id)},
+        )).fetchall()
+        statuses = [r.status for r in rows]
+        assert "skipped_no_matches" in statuses
+
+        await db_session.execute(
+            text("DELETE FROM jobs.alert_subscriptions WHERE user_id = 'retry-test-user-4'")
+        )
+        await db_session.commit()
+
+    async def test_retry_does_not_resend_already_sent_subscription(self, db_session: AsyncSession):
+        """A subscription that has a 'sent' row today is not picked up for retry."""
+        from datetime import timedelta
+        from unittest.mock import AsyncMock, patch
+        from tests.conftest import _TestSession
+        from app.alert_tasks import _async_retry_failed_deliveries, _RETRY_BASE_MINUTES
+
+        sub_id_result = await db_session.execute(
+            text("""
+                INSERT INTO jobs.alert_subscriptions
+                    (user_id, email, name, is_active, delivery_time_utc)
+                VALUES (:uid, :email, 'Retry User 5', true, 9)
+                ON CONFLICT (user_id) DO UPDATE SET email = EXCLUDED.email
+                RETURNING id
+            """),
+            {"uid": "retry-test-user-5", "email": "retry5@example.com"},
+        )
+        sub_id = sub_id_result.scalar_one()
+        await db_session.commit()
+
+        old_enough = datetime.now(timezone.utc) - timedelta(minutes=_RETRY_BASE_MINUTES * 2)
+        await db_session.execute(
+            text("""
+                INSERT INTO jobs.alert_deliveries
+                    (subscription_id, delivered_at, jobs_sent, status, error_message)
+                VALUES (:sid, :ts, 0, 'failed', 'transient error')
+            """),
+            {"sid": str(sub_id), "ts": old_enough},
+        )
+        await db_session.execute(
+            text("""
+                INSERT INTO jobs.alert_deliveries
+                    (subscription_id, jobs_sent, status)
+                VALUES (:sid, 5, 'sent')
+            """),
+            {"sid": str(sub_id)},
+        )
+        await db_session.commit()
+
+        with patch("app.alert_tasks._make_session", return_value=_TestSession), \
+             patch("app.alert_tasks._render_and_send", new_callable=AsyncMock) as mock_send:
+            result = await _async_retry_failed_deliveries()
+
+        assert result["processed"] == 0
+        mock_send.assert_not_called()
+
+        await db_session.execute(
+            text("DELETE FROM jobs.alert_subscriptions WHERE user_id = 'retry-test-user-5'")
+        )
+        await db_session.commit()
+
+
 # ── Validation bounds ─────────────────────────────────────────────────────────
 
 class TestValidationBounds:
