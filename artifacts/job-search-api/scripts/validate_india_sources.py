@@ -5,6 +5,10 @@ For each jobs.ats_sources row where country='IN', is_active=false,
 and ats_slug IS NOT NULL: send a probe request to the appropriate ATS
 endpoint and mark the source active/inactive based on the response.
 
+On a successful Workday probe the confirmed instance + career_site_name
+are written back into crawl_config so WorkdayCrawler can use the CXS
+API immediately without guessing.
+
 Usage:
     python scripts/validate_india_sources.py             # validate all
     python scripts/validate_india_sources.py --limit 10  # first 10 only
@@ -14,7 +18,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -43,47 +49,93 @@ _BROWSER_UA = (
     "Chrome/122.0.0.0 Safari/537.36"
 )
 _WORKDAY_INSTANCES = ["wd1", "wd3", "wd5", "wd12"]
+_WORKDAY_SITE_NAMES = ["External", "Careers", "ExternalCareers"]
 _TIMEOUT = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=5.0)
 
+# Parses instance + site_name out of a Workday career site URL.
+_WORKDAY_URL_RE = re.compile(
+    r"https://[\w-]+\.(wd\d+)\.myworkdayjobs\.com/([^/?#\s]+)"
+)
 
-def _probe_workday_sync(slug: str, location_filter: str | None) -> dict[str, Any]:
-    """Try Workday CXS API across wd1/wd3/wd5/wd12. Returns {active, career_site_url}."""
+
+def _parse_workday_url(career_site_url: str | None) -> tuple[str, str] | None:
+    """Return (instance, career_site_name) parsed from a Workday URL, or None."""
+    if not career_site_url:
+        return None
+    m = _WORKDAY_URL_RE.search(career_site_url)
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
+
+def _try_workday_cxs(
+    slug: str,
+    instance: str,
+    site_name: str,
+    location_filter: str | None,
+) -> dict[str, Any] | None:
+    """POST one CXS probe. Returns dict on success, None on any failure."""
+    url = (
+        f"https://{slug}.{instance}.myworkdayjobs.com"
+        f"/wday/cxs/{slug}/{site_name}/jobs"
+    )
+    body: dict[str, Any] = {"limit": 5, "offset": 0}
+    if location_filter:
+        body["appliedFacets"] = {"Location": [location_filter]}
+
     headers = {
         "User-Agent": _BROWSER_UA,
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
-    body: dict[str, Any] = {"limit": 5, "offset": 0}
-    if location_filter:
-        body["appliedFacets"] = {"Location": [location_filter]}
+    try:
+        resp = httpx.post(url, json=body, headers=headers, timeout=_TIMEOUT)
+        time.sleep(1)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("jobPostings") is not None:
+                career_url = (
+                    f"https://{slug}.{instance}.myworkdayjobs.com/{site_name}"
+                )
+                logger.info(
+                    "Workday %s validated: %s/%s (%d postings)",
+                    slug, instance, site_name, len(data["jobPostings"]),
+                )
+                return {
+                    "active": True,
+                    "career_site_url": career_url,
+                    "crawl_config": {"instance": instance, "career_site_name": site_name},
+                }
+    except Exception as exc:
+        logger.debug("Workday CXS probe %s/%s/%s failed: %s", slug, instance, site_name, exc)
+    time.sleep(1)
+    return None
 
+
+def _probe_workday_sync(
+    slug: str,
+    location_filter: str | None,
+    career_site_url: str | None,
+) -> dict[str, Any]:
+    """Probe Workday: try the source's own career_site_url first, then brute-force."""
+    # 1. Try instance/site from the seeded career_site_url (most likely to work)
+    parsed = _parse_workday_url(career_site_url)
+    if parsed:
+        instance, site_name = parsed
+        result = _try_workday_cxs(slug, instance, site_name, location_filter)
+        if result:
+            return result
+
+    # 2. Brute-force remaining combinations
     for instance in _WORKDAY_INSTANCES:
-        for site_name in ["External", "Careers", "ExternalCareers"]:
-            url = (
-                f"https://{slug}.{instance}.myworkdayjobs.com"
-                f"/wday/cxs/{slug}/{site_name}/jobs"
-            )
-            try:
-                resp = httpx.post(url, json=body, headers=headers, timeout=_TIMEOUT)
-                time.sleep(1)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("jobPostings") is not None:
-                        career_url = (
-                            f"https://{slug}.{instance}.myworkdayjobs.com/{site_name}"
-                        )
-                        logger.info(
-                            "Workday %s validated: %s (%d postings)",
-                            slug,
-                            url,
-                            len(data["jobPostings"]),
-                        )
-                        return {"active": True, "career_site_url": career_url}
-            except Exception as exc:
-                logger.debug("Workday probe %s failed: %s", url, exc)
-                time.sleep(1)
+        for site_name in _WORKDAY_SITE_NAMES:
+            if parsed and (instance, site_name) == parsed:
+                continue  # already tried above
+            result = _try_workday_cxs(slug, instance, site_name, location_filter)
+            if result:
+                return result
 
-    return {"active": False, "career_site_url": None}
+    return {"active": False, "career_site_url": None, "crawl_config": None}
 
 
 def _probe_greenhouse_sync(slug: str) -> dict[str, Any]:
@@ -101,11 +153,12 @@ def _probe_greenhouse_sync(slug: str) -> dict[str, Any]:
                 return {
                     "active": True,
                     "career_site_url": f"https://boards.greenhouse.io/{slug}",
+                    "crawl_config": None,
                 }
     except Exception as exc:
-        logger.debug("Greenhouse probe %s failed: %s", url, exc)
+        logger.debug("Greenhouse probe %s failed: %s", slug, exc)
     time.sleep(1)
-    return {"active": False, "career_site_url": None}
+    return {"active": False, "career_site_url": None, "crawl_config": None}
 
 
 def _probe_lever_sync(slug: str) -> dict[str, Any]:
@@ -121,23 +174,29 @@ def _probe_lever_sync(slug: str) -> dict[str, Any]:
                 return {
                     "active": True,
                     "career_site_url": f"https://jobs.lever.co/{slug}",
+                    "crawl_config": None,
                 }
     except Exception as exc:
-        logger.debug("Lever probe %s failed: %s", url, exc)
+        logger.debug("Lever probe %s failed: %s", slug, exc)
     time.sleep(1)
-    return {"active": False, "career_site_url": None}
+    return {"active": False, "career_site_url": None, "crawl_config": None}
 
 
-def _probe(ats_type: str, ats_slug: str, location_filter: str | None) -> dict[str, Any]:
+def _probe(
+    ats_type: str,
+    ats_slug: str,
+    location_filter: str | None,
+    career_site_url: str | None,
+) -> dict[str, Any]:
     if ats_type == "workday":
-        return _probe_workday_sync(ats_slug, location_filter)
+        return _probe_workday_sync(ats_slug, location_filter, career_site_url)
     elif ats_type == "greenhouse":
         return _probe_greenhouse_sync(ats_slug)
     elif ats_type == "lever":
         return _probe_lever_sync(ats_slug)
     else:
         logger.warning("No probe strategy for ats_type=%s", ats_type)
-        return {"active": False, "career_site_url": None}
+        return {"active": False, "career_site_url": None, "crawl_config": None}
 
 
 async def run(dry_run: bool, limit: int | None) -> None:
@@ -162,13 +221,13 @@ async def run(dry_run: bool, limit: int | None) -> None:
     validated = failed = 0
 
     for row in rows:
-        source_id, ats_type, ats_slug, location_filter, _, _ = row
+        source_id, ats_type, ats_slug, location_filter, _, career_site_url = row
 
         if dry_run:
             print(f"  WOULD PROBE: {ats_slug!r} ({ats_type})")
             continue
 
-        result = _probe(ats_type, ats_slug, location_filter)
+        result = _probe(ats_type, ats_slug, location_filter, career_site_url)
         status = "validated" if result["active"] else "validation_failed"
         icon = "✓" if result["active"] else "✗"
         print(f"  {icon} {ats_slug} ({ats_type}): {status}")
@@ -180,6 +239,11 @@ async def run(dry_run: bool, limit: int | None) -> None:
                     SET is_active         = :active,
                         last_crawl_status = :status,
                         career_site_url   = COALESCE(:url, career_site_url),
+                        crawl_config      = CASE
+                                               WHEN :crawl_config::text IS NOT NULL
+                                               THEN :crawl_config::jsonb
+                                               ELSE crawl_config
+                                           END,
                         updated_at        = now()
                     WHERE id = :id
                 """),
@@ -188,6 +252,11 @@ async def run(dry_run: bool, limit: int | None) -> None:
                     "active": result["active"],
                     "status": status,
                     "url": result.get("career_site_url"),
+                    "crawl_config": (
+                        json.dumps(result["crawl_config"])
+                        if result.get("crawl_config")
+                        else None
+                    ),
                 },
             )
             await db.commit()

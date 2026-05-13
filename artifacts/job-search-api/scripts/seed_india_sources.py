@@ -6,11 +6,11 @@ Usage:
     python scripts/seed_india_sources.py --dry-run # preview, no DB writes
 
 Rules:
-- Skips records where ats_type='custom' or ats_slug is null
-- For valid records: find-or-create a jobs.companies placeholder row, then
-  upsert jobs.ats_sources keyed on (ats_type, ats_slug, country)
-- Sets is_active=false and last_crawl_status='pending_validation' on insert
-- Never modifies existing rows where country='US'
+- Skips records where ats_type='custom' or ats_slug is null (reference only).
+- For Workday records with a career_site_url, parses instance + career_site_name
+  and persists them in crawl_config so the crawler can use the CXS API immediately.
+- Never modifies existing rows where country='US'.
+- Sets is_active=false, last_crawl_status='pending_validation' on fresh inserts.
 """
 from __future__ import annotations
 
@@ -40,13 +40,29 @@ logger = logging.getLogger("seed_india")
 
 DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "india_ats_sources.json"
 
+# Matches: https://<slug>.<instance>.myworkdayjobs.com/<career_site_name>
+_WORKDAY_URL_RE = re.compile(
+    r"https://[\w-]+\.(wd\d+)\.myworkdayjobs\.com/([^/?#\s]+)"
+)
+
 
 def _slugify(name: str) -> str:
-    """Convert a company name to a URL-safe slug."""
     slug = name.lower()
     slug = re.sub(r"[^a-z0-9]+", "-", slug)
-    slug = slug.strip("-")
-    return slug
+    return slug.strip("-")
+
+
+def _parse_workday_config(career_site_url: str | None) -> dict | None:
+    """Extract {'instance': 'wd3', 'career_site_name': 'AccentureCareers'} from a Workday URL.
+
+    Returns None if the URL doesn't match the expected Workday pattern.
+    """
+    if not career_site_url:
+        return None
+    m = _WORKDAY_URL_RE.search(career_site_url)
+    if not m:
+        return None
+    return {"instance": m.group(1), "career_site_name": m.group(2)}
 
 
 async def run(dry_run: bool) -> None:
@@ -73,12 +89,18 @@ async def run(dry_run: bool) -> None:
             location_filter: str | None = rec.get("location_filter")
             notes: str | None = rec.get("notes")
 
+            # Build crawl_config for Workday sources so the crawler can hit CXS API directly.
+            crawl_config: dict | None = None
+            if ats_type == "workday":
+                crawl_config = _parse_workday_config(career_site_url)
+
             company_slug = _slugify(company_name)
 
             if dry_run:
+                config_info = f" crawl_config={crawl_config}" if crawl_config else ""
                 print(
                     f"  WOULD UPSERT: {company_name!r} | "
-                    f"ats_type={ats_type} slug={ats_slug} country={country}"
+                    f"ats_type={ats_type} slug={ats_slug} country={country}{config_info}"
                 )
                 inserted += 1
                 continue
@@ -111,6 +133,7 @@ async def run(dry_run: bool) -> None:
                         SET career_site_url  = :career_site_url,
                             location_filter  = :location_filter,
                             notes            = :notes,
+                            crawl_config     = COALESCE(:crawl_config::jsonb, crawl_config),
                             updated_at       = now()
                         WHERE id = :id
                     """),
@@ -119,6 +142,7 @@ async def run(dry_run: bool) -> None:
                         "career_site_url": career_site_url,
                         "location_filter": location_filter,
                         "notes": notes,
+                        "crawl_config": json.dumps(crawl_config) if crawl_config else None,
                     },
                 )
                 updated += 1
@@ -128,11 +152,11 @@ async def run(dry_run: bool) -> None:
                     text("""
                         INSERT INTO jobs.ats_sources
                             (company_id, ats_type, ats_slug, career_site_url,
-                             country, location_filter, notes,
+                             country, location_filter, notes, crawl_config,
                              is_active, last_crawl_status)
                         VALUES
                             (:company_id, :ats_type, :ats_slug, :career_site_url,
-                             :country, :location_filter, :notes,
+                             :country, :location_filter, :notes, :crawl_config::jsonb,
                              false, 'pending_validation')
                     """),
                     {
@@ -143,6 +167,7 @@ async def run(dry_run: bool) -> None:
                         "country": country,
                         "location_filter": location_filter,
                         "notes": notes,
+                        "crawl_config": json.dumps(crawl_config) if crawl_config else "{}",
                     },
                 )
                 inserted += 1
