@@ -1,0 +1,272 @@
+You are extending an existing job search microservice built with 
+FastAPI, PostgreSQL, Celery, Redis, and SQLAlchemy. The service 
+crawls job listings from ATS platforms (Workday, Greenhouse, Lever, 
+SmartRecruiters) and stores them in a jobs.job_listings table.
+
+Your task is to add a Job Alerts & Motivational Email Notification 
+feature to this existing service.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FEATURE OVERVIEW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Users subscribe to daily job alert emails. Every morning at 6 AM, 
+the system:
+1. Finds all active alert subscriptions
+2. Queries job listings posted in the last 24 hours matching each 
+   user's filters (title keywords, location, employment type)
+3. If matches exist, generates a short AI motivational intro 
+   paragraph using GPT-4o-mini (if enabled by user)
+4. Sends a formatted HTML email via Resend API
+5. Logs delivery status to DB
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 1 — DATABASE SCHEMA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create a new Alembic migration that adds these two tables 
+to the existing database:
+
+Table: jobs.alert_subscriptions
+- id: UUID primary key
+- user_id: VARCHAR (external ID from TrackNJob frontend, not a FK)
+- email: VARCHAR(255) NOT NULL
+- name: VARCHAR(255) (for personalization)
+- is_active: BOOLEAN DEFAULT true
+- keywords: TEXT[] (array of job title keywords e.g. ["engineer", "python"])
+- locations: TEXT[] (array of locations e.g. ["San Francisco", "Remote"])
+- employment_types: TEXT[] (e.g. ["FULL_TIME", "CONTRACT"])
+- ats_types: TEXT[] (filter by ATS, nullable = all)
+- job_search_started_at: TIMESTAMP (when user started job hunting, 
+  for "day X of your search" in email)
+- motivational_email_enabled: BOOLEAN DEFAULT true
+- delivery_time_utc: INTEGER DEFAULT 13 (1 PM UTC = 6 AM PDT)
+- created_at: TIMESTAMP DEFAULT now()
+- updated_at: TIMESTAMP DEFAULT now()
+
+Table: jobs.alert_deliveries
+- id: UUID primary key
+- subscription_id: UUID FK → jobs.alert_subscriptions.id
+- delivered_at: TIMESTAMP DEFAULT now()
+- jobs_sent: INTEGER (count of job listings in this email)
+- status: VARCHAR(50) ('sent', 'failed', 'skipped_no_matches')
+- resend_message_id: VARCHAR (ID returned by Resend API)
+- error_message: TEXT (if failed)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 2 — API ENDPOINTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Add these endpoints to the FastAPI app under /api/v1/alerts:
+
+POST /api/v1/alerts/subscribe
+Request body:
+{
+  "user_id": "string",
+  "email": "string",
+  "name": "string",
+  "keywords": ["string"],
+  "locations": ["string"],
+  "employment_types": ["FULL_TIME", "PART_TIME", "CONTRACT"],
+  "ats_types": ["workday", "greenhouse"],  // optional
+  "job_search_started_at": "2026-05-01T00:00:00Z",  // optional
+  "motivational_email_enabled": true,
+  "delivery_time_utc": 13
+}
+Response: { "subscription_id": "uuid", "message": "Subscribed successfully" }
+- Upsert by user_id+email — do not create duplicates
+
+GET /api/v1/alerts/subscription/{user_id}
+Response: full subscription object or 404
+
+PATCH /api/v1/alerts/subscription/{user_id}
+- Update any fields (keywords, locations, motivational toggle, etc.)
+Response: updated subscription object
+
+DELETE /api/v1/alerts/unsubscribe/{user_id}
+- Sets is_active=false (soft delete)
+Response: { "message": "Unsubscribed successfully" }
+
+POST /api/v1/alerts/test-send/{user_id}
+- Manually trigger a test alert email for this user immediately
+- Useful for development and user onboarding
+Response: { "message": "Test email sent", "jobs_found": N }
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 3 — EMAIL TEMPLATE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create app/templates/alert_email.html as a clean HTML email template.
+
+Structure:
+┌─────────────────────────────────────┐
+│  TrackNJob logo/wordmark (text ok)  │
+│  "Good morning, {name} ☀️"          │
+├─────────────────────────────────────┤
+│  [AI MOTIVATIONAL PARAGRAPH]        │
+│  (only shown if enabled)            │
+│  Subtle, warm, 2-3 sentences.       │
+│  NOT over-the-top affirmations.     │
+├─────────────────────────────────────┤
+│  "{N} new jobs matched today"       │
+│  "Matching: {keywords} · {location}"│
+├─────────────────────────────────────┤
+│  JOB CARD × N                       │
+│  Title — Company                    │
+│  📍 Location · 💼 Type              │
+│  [View & Apply →] button            │
+├─────────────────────────────────────┤
+│  Footer: Manage preferences         │
+│  One-click unsubscribe link         │
+└─────────────────────────────────────┘
+
+Requirements:
+- Clean, minimal design — works in Gmail, Outlook, Apple Mail
+- Max 10 job listings per email (show top 10 if more matched)
+- If 0 matches: do not send (log as 'skipped_no_matches')
+- Mobile responsive
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 4 — MOTIVATIONAL AI PARAGRAPH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create app/services/motivational.py
+
+Function: generate_motivational_intro(user_context: dict) -> str
+
+user_context fields:
+- name: str
+- days_searching: int (calculated from job_search_started_at)
+- jobs_found_today: int
+- top_job_title: str (title of first matched job)
+- top_company: str (company of first matched job)
+
+GPT-4o-mini prompt template:
+"""
+You are a warm, encouraging job search companion. Write a 2-3 sentence 
+personalized morning message for {name} who has been job searching for 
+{days_searching} days. Today there are {jobs_found_today} new job matches, 
+including a {top_job_title} role at {top_company}.
+
+Tone: genuine, grounded, human — NOT over-the-top or cheesy.
+Do not use phrases like "you've got this!" or "crush it today".
+Keep it under 60 words. No subject line, just the paragraph.
+"""
+
+- If OPENAI_API_KEY is not set, return a default static message instead
+- Handle API errors gracefully — fall back to static message
+- Cache is NOT needed (called once per user per day)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 5 — CELERY TASK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create app/tasks/alert_tasks.py
+
+Task: send_daily_alerts
+- Runs via Celery Beat every hour (scheduler checks delivery_time_utc 
+  per subscription, not a single global send time)
+- For each active subscription where current UTC hour matches 
+  delivery_time_utc AND no delivery exists for today:
+  
+  1. Query jobs.job_listings WHERE:
+     - created_at >= now() - interval '24 hours'
+     - title ILIKE ANY(keywords) [at least one keyword match]
+     - location ILIKE ANY(locations) OR 'Remote' in locations
+     - employment_type = ANY(employment_types) if set
+     - ats_type = ANY(ats_types) if set
+     ORDER BY created_at DESC
+     LIMIT 10
+
+  2. If 0 results → log alert_delivery with status='skipped_no_matches', skip
+
+  3. If motivational_email_enabled AND OPENAI_API_KEY set:
+     → call generate_motivational_intro(user_context)
+
+  4. Render alert_email.html template with jobs + motivational text
+
+  5. Send via Resend:
+     from: "TrackNJob Alerts <alerts@tracknjob.com>"
+     to: subscription.email
+     subject: f"☀️ {jobs_found} new jobs for you today, {name}"
+
+  6. Log to alert_deliveries:
+     - status: 'sent' or 'failed'
+     - jobs_sent: count
+     - resend_message_id: from Resend response
+
+Add to existing Celery Beat schedule:
+'send-daily-alerts': {
+    'task': 'app.tasks.alert_tasks.send_daily_alerts',
+    'schedule': crontab(minute=0),  # runs every hour, task self-filters
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 6 — CONFIG & ENV VARS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Add to app/config.py:
+- RESEND_API_KEY: str
+- RESEND_FROM_EMAIL: str = "alerts@tracknjob.com"
+- OPENAI_API_KEY: str = ""  # optional, motivational emails
+- ALERTS_ENABLED: bool = True
+
+Add to .env.example:
+RESEND_API_KEY=re_your_key_here
+RESEND_FROM_EMAIL=alerts@tracknjob.com
+OPENAI_API_KEY=sk-your_key_here  # optional
+ALERTS_ENABLED=true
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 7 — VERIFICATION STEPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+After implementation, verify all of the following and report results:
+
+Step 1 — DB migration ran cleanly:
+SELECT table_name FROM information_schema.tables 
+WHERE table_schema = 'jobs' 
+AND table_name IN ('alert_subscriptions', 'alert_deliveries');
+
+Step 2 — Subscribe endpoint works:
+POST /api/v1/alerts/subscribe with test payload
+→ confirm subscription_id returned
+→ confirm duplicate call returns same subscription_id (upsert)
+
+Step 3 — Test send works:
+POST /api/v1/alerts/test-send/{user_id}
+→ confirm email received at test address
+→ confirm alert_deliveries row created with status='sent'
+
+Step 4 — Motivational paragraph generated:
+Call generate_motivational_intro() with mock context
+→ print output, confirm it's under 60 words and not cheesy
+
+Step 5 — Zero-match skip works:
+Create subscription with keywords that match nothing
+→ trigger test send → confirm status='skipped_no_matches' 
+→ confirm no email sent
+
+Step 6 — Unsubscribe works:
+DELETE /api/v1/alerts/unsubscribe/{user_id}
+→ confirm is_active=false in DB
+→ confirm next send cycle skips this subscription
+
+Step 7 — Existing service unaffected:
+GET /api/v1/jobs/search?country=US
+→ confirm still returns jobs normally
+→ confirm existing crawl tasks still registered in Celery Beat
+
+Report: pass/fail for each step + any issues found.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+IMPORTANT CONSTRAINTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Do NOT modify any existing crawler files
+- Do NOT modify existing DB tables or migrations
+- Do NOT modify existing API endpoints
+- Use the existing SQLAlchemy session pattern in the codebase
+- Use the existing Celery app instance, do not create a new one
+- Install new dependencies: resend, openai, jinja2 (if not present)
+- All new code goes in: app/tasks/, app/services/, app/templates/, 
+  app/api/v1/alerts.py, app/models/alert.py
