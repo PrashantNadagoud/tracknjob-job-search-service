@@ -67,9 +67,9 @@ class TestWorkdayCrawler:
     def mock_db_session(self):
         # We need a context manager mock for AsyncSessionFactory()
         mock_db = AsyncMock()
-        # The query returns a row where row[0] is the crawl_config JSONB object
+        # The query returns (crawl_config, location_filter); location_filter=None → sitemap path
         mock_result = MagicMock()
-        mock_result.fetchone.return_value = ({"instance": "wd1", "career_site_name": "External"},)
+        mock_result.fetchone.return_value = ({"instance": "wd1", "career_site_name": "External"}, None)
         mock_db.execute.return_value = mock_result
         
         class MockSessionContext:

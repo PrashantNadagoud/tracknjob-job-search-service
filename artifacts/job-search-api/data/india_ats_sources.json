@@ -1,0 +1,236 @@
+[
+  {
+    "company_name": "Accenture India",
+    "ats_type": "workday",
+    "ats_slug": "accenture",
+    "career_site_url": "https://accenture.wd3.myworkdayjobs.com/AccentureCareers",
+    "country": "IN",
+    "location_filter": "India",
+    "notes": "Global Workday slug, filter by India location"
+  },
+  {
+    "company_name": "IBM India",
+    "ats_type": "workday",
+    "ats_slug": "ibm",
+    "career_site_url": "https://ibm.wd12.myworkdayjobs.com/IBMExternalSite",
+    "country": "IN",
+    "location_filter": "India",
+    "notes": "Global Workday slug, filter by India location"
+  },
+  {
+    "company_name": "Capgemini India",
+    "ats_type": "workday",
+    "ats_slug": "capgemini",
+    "career_site_url": "https://capgemini.wd3.myworkdayjobs.com/Capgemini_Careers",
+    "country": "IN",
+    "location_filter": "India",
+    "notes": "Global Workday slug, filter by India location"
+  },
+  {
+    "company_name": "Deloitte India",
+    "ats_type": "workday",
+    "ats_slug": "deloitte",
+    "career_site_url": "https://deloitte.wd1.myworkdayjobs.com/DeloitteCareers",
+    "country": "IN",
+    "location_filter": "India",
+    "notes": "Global Workday slug, filter by India location"
+  },
+  {
+    "company_name": "EY India",
+    "ats_type": "workday",
+    "ats_slug": "ey",
+    "career_site_url": "https://ey.wd5.myworkdayjobs.com/EY_External_Careers",
+    "country": "IN",
+    "location_filter": "India",
+    "notes": "Global Workday slug, filter by India location"
+  },
+  {
+    "company_name": "KPMG India",
+    "ats_type": "workday",
+    "ats_slug": "kpmg",
+    "career_site_url": "https://kpmg.wd5.myworkdayjobs.com/Careers",
+    "country": "IN",
+    "location_filter": "India",
+    "notes": "Global Workday slug, filter by India location"
+  },
+  {
+    "company_name": "PwC India",
+    "ats_type": "workday",
+    "ats_slug": "pwc",
+    "career_site_url": "https://pwc.wd3.myworkdayjobs.com/Global_Experienced_Careers",
+    "country": "IN",
+    "location_filter": "India",
+    "notes": "Global Workday slug, filter by India location"
+  },
+  {
+    "company_name": "Cognizant India",
+    "ats_type": "workday",
+    "ats_slug": "cognizant",
+    "career_site_url": "https://cognizant.wd1.myworkdayjobs.com/Cognizant_Careers",
+    "country": "IN",
+    "location_filter": "India",
+    "notes": "Global Workday slug, filter by India location"
+  },
+  {
+    "company_name": "Oracle India",
+    "ats_type": "workday",
+    "ats_slug": "oracle",
+    "career_site_url": "https://oracle.wd1.myworkdayjobs.com/OracleJobs",
+    "country": "IN",
+    "location_filter": "India",
+    "notes": "Global Workday slug, filter by India location"
+  },
+  {
+    "company_name": "SAP India",
+    "ats_type": "workday",
+    "ats_slug": "sap",
+    "career_site_url": "https://sap.wd3.myworkdayjobs.com/SAP",
+    "country": "IN",
+    "location_filter": "India",
+    "notes": "Global Workday slug, filter by India location"
+  },
+  {
+    "company_name": "Adobe India",
+    "ats_type": "workday",
+    "ats_slug": "adobe",
+    "career_site_url": "https://adobe.wd5.myworkdayjobs.com/external_experienced",
+    "country": "IN",
+    "location_filter": "India",
+    "notes": "Global Workday slug, filter by India location"
+  },
+  {
+    "company_name": "Cisco India",
+    "ats_type": "workday",
+    "ats_slug": "cisco",
+    "career_site_url": "https://cisco.wd5.myworkdayjobs.com/External",
+    "country": "IN",
+    "location_filter": "India",
+    "notes": "Global Workday slug, filter by India location"
+  },
+  {
+    "company_name": "Dell India",
+    "ats_type": "workday",
+    "ats_slug": "dell",
+    "career_site_url": "https://dell.wd1.myworkdayjobs.com/External",
+    "country": "IN",
+    "location_filter": "India",
+    "notes": "Global Workday slug, filter by India location"
+  },
+  {
+    "company_name": "Microsoft India",
+    "ats_type": "workday",
+    "ats_slug": "microsoft",
+    "career_site_url": "https://microsoft.wd1.myworkdayjobs.com/External",
+    "country": "IN",
+    "location_filter": "India",
+    "notes": "Global Workday slug, filter by India location"
+  },
+  {
+    "company_name": "Freshworks",
+    "ats_type": "greenhouse",
+    "ats_slug": "freshworks",
+    "career_site_url": "https://boards.greenhouse.io/freshworks",
+    "country": "IN",
+    "location_filter": null,
+    "notes": "Indian-origin company, Greenhouse confirmed"
+  },
+  {
+    "company_name": "Chargebee",
+    "ats_type": "greenhouse",
+    "ats_slug": "chargebee",
+    "career_site_url": "https://boards.greenhouse.io/chargebee",
+    "country": "IN",
+    "location_filter": null,
+    "notes": "Indian-origin SaaS, Greenhouse confirmed"
+  },
+  {
+    "company_name": "Postman",
+    "ats_type": "greenhouse",
+    "ats_slug": "postman",
+    "career_site_url": "https://boards.greenhouse.io/postman",
+    "country": "IN",
+    "location_filter": null,
+    "notes": "Indian-origin product company, Greenhouse confirmed"
+  },
+  {
+    "company_name": "BrowserStack",
+    "ats_type": "greenhouse",
+    "ats_slug": "browserstack",
+    "career_site_url": "https://boards.greenhouse.io/browserstack",
+    "country": "IN",
+    "location_filter": null,
+    "notes": "Indian-origin, Greenhouse confirmed"
+  },
+  {
+    "company_name": "Darwinbox",
+    "ats_type": "greenhouse",
+    "ats_slug": "darwinbox",
+    "career_site_url": "https://boards.greenhouse.io/darwinbox",
+    "country": "IN",
+    "location_filter": null,
+    "notes": "Indian HR-tech startup, Greenhouse"
+  },
+  {
+    "company_name": "Leadsquared",
+    "ats_type": "greenhouse",
+    "ats_slug": "leadsquared",
+    "career_site_url": "https://boards.greenhouse.io/leadsquared",
+    "country": "IN",
+    "location_filter": null,
+    "notes": "Indian SaaS, Greenhouse"
+  },
+  {
+    "company_name": "TCS",
+    "ats_type": "custom",
+    "ats_slug": null,
+    "career_site_url": "https://ibegin.tcs.com/iBegin",
+    "country": "IN",
+    "location_filter": null,
+    "notes": "Custom NextStep portal — not crawlable with current stack"
+  },
+  {
+    "company_name": "Infosys",
+    "ats_type": "custom",
+    "ats_slug": null,
+    "career_site_url": "https://careers.infosys.com",
+    "country": "IN",
+    "location_filter": null,
+    "notes": "Custom portal — not crawlable with current stack"
+  },
+  {
+    "company_name": "Wipro",
+    "ats_type": "custom",
+    "ats_slug": null,
+    "career_site_url": "https://careers.wipro.com",
+    "country": "IN",
+    "location_filter": null,
+    "notes": "Custom portal — not crawlable with current stack"
+  },
+  {
+    "company_name": "HCL Technologies",
+    "ats_type": "custom",
+    "ats_slug": null,
+    "career_site_url": "https://www.hcltech.com/careers",
+    "country": "IN",
+    "location_filter": null,
+    "notes": "Custom portal — not crawlable with current stack"
+  },
+  {
+    "company_name": "Flipkart",
+    "ats_type": "custom",
+    "ats_slug": null,
+    "career_site_url": "https://www.flipkartcareers.com",
+    "country": "IN",
+    "location_filter": null,
+    "notes": "Custom portal — not crawlable with current stack"
+  },
+  {
+    "company_name": "Zerodha",
+    "ats_type": "custom",
+    "ats_slug": null,
+    "career_site_url": "https://careers.zerodha.com",
+    "country": "IN",
+    "location_filter": null,
+    "notes": "Custom portal — not crawlable with current stack"
+  }
+]

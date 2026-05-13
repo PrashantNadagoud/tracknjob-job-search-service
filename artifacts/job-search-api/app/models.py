@@ -176,7 +176,7 @@ class AtsSource(Base):
 
     __tablename__ = "ats_sources"
     __table_args__ = (
-        sa.UniqueConstraint("company_id", "ats_type", name="uq_ats_source"),
+        sa.UniqueConstraint("company_id", "ats_type", "country", name="uq_ats_source_country"),
         Index("idx_ats_sources_company", "company_id"),
         Index(
             "idx_ats_sources_crawl_due",
@@ -199,8 +199,14 @@ class AtsSource(Base):
     ats_type: Mapped[str] = mapped_column(Text, nullable=False)
     ats_slug: Mapped[str | None] = mapped_column(Text, nullable=True)
     crawl_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    career_site_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     crawl_config: Mapped[dict | None] = mapped_column(JSONB, server_default="'{}'", nullable=True)
     market: Mapped[str] = mapped_column(Text, server_default="US", nullable=False)
+    country: Mapped[str] = mapped_column(
+        sa.String(2), server_default="US", nullable=False
+    )
+    location_filter: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, server_default="true", nullable=False
     )
