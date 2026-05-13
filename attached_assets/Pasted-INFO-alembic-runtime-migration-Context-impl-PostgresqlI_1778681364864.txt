@@ -1,0 +1,87 @@
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 0001, Initial schema: jobs.listings, jobs.saved_searches, jobs.hidden_jobs
+INFO  [alembic.runtime.migration] Running upgrade 0001 -> 0002, Add country column to jobs.listings
+INFO  [alembic.runtime.migration] Running upgrade 0002 -> 0003, Ghost job detection: last_seen_at column, pg_trgm extension, indexes
+INFO  [alembic.runtime.migration] Running upgrade 0003 -> 0004, Job alerts: last_alerted_at, last_alerted_job_ids, user_email on saved_searches
+INFO  [alembic.runtime.migration] Running upgrade 0004 -> 0005, Add jobs.job_preferences table for match scoring
+INFO  [alembic.runtime.migration] Running upgrade 0005 -> 0006, Add jobs.companies table and company_id FK on listings
+INFO  [alembic.runtime.migration] Running upgrade 0006 -> 0007, Add geo_restriction column to jobs.listings
+INFO  [alembic.runtime.migration] Running upgrade 0007 -> 0008, ATS infrastructure: ats_sources, company_discovery_queue, crawl_dead_letters,
+and new columns on listings / companies.
+INFO  [alembic.runtime.migration] Running upgrade 0008 -> 0009, Alert subscriptions and deliveries tables.
+INFO  [alembic.runtime.migration] Running upgrade 0009 -> 0010, Add unique partial index on alert_deliveries for deduplication.
+Traceback (most recent call last):
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 550, in _prepare_and_execute
+    self._rows = deque(await prepared_stmt.fetch(*parameters))
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/asyncpg/prepared_stmt.py", line 177, in fetch
+    data = await self.__bind_execute(args, 0, timeout)
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/asyncpg/prepared_stmt.py", line 268, in __bind_execute
+    data, status, _ = await self.__do_execute(
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/asyncpg/prepared_stmt.py", line 257, in __do_execute
+    return await executor(protocol)
+  File "asyncpg/protocol/protocol.pyx", line 205, in bind_execute
+asyncpg.exceptions.InvalidObjectDefinitionError: functions in index expression must be marked IMMUTABLE
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
+    cursor.execute(statement, parameters)
+    context.run_migrations()
+  File "<string>", line 8, in run_migrations
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/alembic/runtime/environment.py", line 969, in run_migrations
+    self.get_context().run_migrations(**kw)
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/alembic/runtime/migration.py", line 626, in run_migrations
+    step.migration_fn(**kw)
+  File "/home/runner/work/tracknjob-job-search-service/tracknjob-job-search-service/artifacts/job-search-api/app/migrations/versions/0010_alert_delivery_dedup_index.py", line 20, in upgrade
+    op.execute("""
+  File "<string>", line 8, in execute
+  File "<string>", line 3, in execute
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/alembic/operations/ops.py", line 2667, in execute
+    return operations.invoke(op)
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/alembic/operations/base.py", line 452, in invoke
+    return fn(self, operation)
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/alembic/operations/toimpl.py", line 259, in execute_sql
+    operations.migration_context.impl.execute(
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/alembic/ddl/impl.py", line 263, in execute
+    self._exec(sql, execution_options)
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/alembic/ddl/impl.py", line 256, in _exec
+    return conn.execute(construct, params)
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/engine/base.py", line 1419, in execute
+    return meth(
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/sql/elements.py", line 527, in _execute_on_connection
+    return connection._execute_clauseelement(
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/engine/base.py", line 1641, in _execute_clauseelement
+    ret = self._execute_context(
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/engine/base.py", line 2363, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
+    cursor.execute(statement, parameters)
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 585, in execute
+    self._adapt_connection.await_(
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 196, in greenlet_spawn
+    value = await result
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 563, in _prepare_and_execute
+    self._handle_exception(error)
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 513, in _handle_exception
+    self._adapt_connection._handle_exception(error)
+  File "/opt/hostedtoolcache/Python/3.10.20/x64/lib/python3.10/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 797, in _handle_exception
+    raise translated_error from error
+sqlalchemy.exc.ProgrammingError: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.InvalidObjectDefinitionError'>: functions in index expression must be marked IMMUTABLE
+[SQL: 
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_alert_deliveries_sub_date_sent
+        ON jobs.alert_deliveries (subscription_id, (delivered_at::date))
+        WHERE status = 'sent'
+    ]
+(Background on this error at: https://sqlalche.me/e/20/f405)
