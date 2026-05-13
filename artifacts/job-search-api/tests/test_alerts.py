@@ -452,6 +452,70 @@ class TestAlertTaskLogic:
         assert result["processed"] == 0
         assert result["sent"] == 0
 
+    async def test_integrity_error_on_duplicate_sent_is_skipped_not_crashed(
+        self, db_session: AsyncSession
+    ):
+        """When the pre-send claim INSERT raises IntegrityError (concurrent worker race),
+        _async_send_daily_alerts must skip without crashing AND without sending the email.
+
+        This validates the claim-first deduplication: the email is never sent to a second
+        worker that loses the race — preventing duplicate emails entirely.
+        """
+        from unittest.mock import AsyncMock, patch, MagicMock
+        from sqlalchemy.exc import IntegrityError as SAIntegrityError
+        from app.alert_tasks import _async_send_daily_alerts
+
+        with patch("app.config.get_settings") as mock_settings, \
+             patch("app.alert_tasks._make_session") as mock_make_session, \
+             patch("app.alert_tasks._query_matching_jobs", new_callable=AsyncMock) as mock_jobs, \
+             patch("app.alert_tasks._render_and_send", new_callable=AsyncMock) as mock_send:
+
+            settings_obj = MagicMock()
+            settings_obj.ALERTS_ENABLED = True
+            mock_settings.return_value = settings_obj
+
+            mock_jobs.return_value = [{"id": "1", "title": "Eng", "company": "Co",
+                                        "location": "Remote", "employment_type": None,
+                                        "source_url": "http://x.com"}]
+            mock_send.return_value = {"status": "sent", "resend_message_id": "msg-1"}
+
+            sub = MagicMock()
+            sub.id = "sub-uuid-1"
+            sub.email = "test@example.com"
+            sub.user_id = "test-user"
+
+            mock_db = AsyncMock()
+            mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+            mock_db.__aexit__ = AsyncMock(return_value=False)
+
+            fetch_result = MagicMock()
+            fetch_result.fetchall.return_value = [sub]
+
+            execute_call_count = 0
+
+            async def execute_side_effect(sql, params=None):
+                nonlocal execute_call_count
+                execute_call_count += 1
+                if execute_call_count == 1:
+                    # First call: return subscriptions list
+                    return fetch_result
+                # Second call: the claim INSERT — simulate concurrent worker won
+                raise SAIntegrityError("duplicate key", {}, Exception("unique violation"))
+
+            mock_db.execute = AsyncMock(side_effect=execute_side_effect)
+
+            mock_session_factory = MagicMock()
+            mock_session_factory.return_value = mock_db
+            mock_make_session.return_value = mock_session_factory
+
+            result = await _async_send_daily_alerts()
+
+        # Email must NOT have been sent — the claim was lost before _render_and_send
+        mock_send.assert_not_called()
+        assert result["skipped"] == 1
+        assert result["sent"] == 0
+        assert result["failed"] == 0
+
     def test_beat_schedule_retains_existing_30min_entry_and_adds_daily_alerts(self):
         from app.celery_config import beat_schedule
         assert "send-job-alerts-every-30-minutes" in beat_schedule, (

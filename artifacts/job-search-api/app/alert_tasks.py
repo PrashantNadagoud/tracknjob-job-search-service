@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from sqlalchemy import pool, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.celery_app import celery_app
@@ -234,15 +235,54 @@ async def _async_send_daily_alerts() -> dict[str, int]:
                     logger.info("Skipped %s (no matches)", sub.user_id)
                     continue
 
+                # Claim the delivery slot atomically BEFORE sending the email.
+                # The UNIQUE partial index on (subscription_id, delivered_at::date)
+                # WHERE status='sent' guarantees that only one worker can win the
+                # INSERT; any concurrent worker will hit IntegrityError and skip,
+                # ensuring the email is sent exactly once per subscription per day.
+                #
+                # Known tradeoff: if this process dies after the claim commit but
+                # before _render_and_send / the UPDATE completes, the row remains
+                # status='sent' with jobs_sent=0 and will suppress retries for the
+                # rest of that UTC day. A future hardening step (explicit 'claiming'
+                # status + advisory lock, or a stale-claim sweeper) can address this.
+                try:
+                    claim = await db.execute(
+                        text("""
+                            INSERT INTO jobs.alert_deliveries
+                                (subscription_id, jobs_sent, status)
+                            VALUES (:sid, 0, 'sent')
+                            RETURNING id
+                        """),
+                        {"sid": sub.id},
+                    )
+                    delivery_id = claim.scalar_one()
+                    await db.commit()
+                except IntegrityError:
+                    await db.rollback()
+                    logger.warning(
+                        "Duplicate delivery skipped for subscription %s "
+                        "(concurrent worker race — claim lost)",
+                        sub.id,
+                    )
+                    counts["skipped"] += 1
+                    continue
+
+                # Claim won — now send the email.
                 result = await _render_and_send(sub, jobs)
+
+                # Update the claimed row with the real outcome.
                 await db.execute(
                     text("""
-                        INSERT INTO jobs.alert_deliveries
-                            (subscription_id, jobs_sent, status, resend_message_id, error_message)
-                        VALUES (:sid, :cnt, :status, :mid, :err)
+                        UPDATE jobs.alert_deliveries
+                        SET jobs_sent          = :cnt,
+                            status             = :status,
+                            resend_message_id  = :mid,
+                            error_message      = :err
+                        WHERE id = :delivery_id
                     """),
                     {
-                        "sid": sub.id,
+                        "delivery_id": delivery_id,
                         "cnt": len(jobs),
                         "status": result["status"],
                         "mid": result.get("resend_message_id"),
