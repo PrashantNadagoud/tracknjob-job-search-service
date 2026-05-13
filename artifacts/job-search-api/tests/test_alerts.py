@@ -451,3 +451,44 @@ class TestAlertTaskLogic:
             result = await _async_send_daily_alerts()
         assert result["processed"] == 0
         assert result["sent"] == 0
+
+    def test_beat_schedule_retains_existing_30min_entry_and_adds_daily_alerts(self):
+        from app.celery_config import beat_schedule
+        assert "send-job-alerts-every-30-minutes" in beat_schedule, (
+            "Old 30-minute job-alert Beat entry must not be removed"
+        )
+        assert "send-daily-alerts" in beat_schedule, (
+            "New hourly send-daily-alerts entry must be present"
+        )
+        assert beat_schedule["send-daily-alerts"]["task"] == "app.alert_tasks.send_daily_alerts"
+
+
+# ── Validation bounds ─────────────────────────────────────────────────────────
+
+class TestValidationBounds:
+    async def test_delivery_time_utc_above_23_rejected(self, async_client: AsyncClient):
+        r = await async_client.post(
+            f"{BASE}/subscribe",
+            json=_subscribe_payload(delivery_time_utc=25),
+            headers=_auth(ALERT_USER_1),
+        )
+        assert r.status_code == 422
+
+    async def test_delivery_time_utc_negative_rejected(self, async_client: AsyncClient):
+        r = await async_client.post(
+            f"{BASE}/subscribe",
+            json=_subscribe_payload(delivery_time_utc=-1),
+            headers=_auth(ALERT_USER_1),
+        )
+        assert r.status_code == 422
+
+    async def test_patch_delivery_time_utc_above_23_rejected(self, async_client: AsyncClient):
+        await async_client.post(
+            f"{BASE}/subscribe", json=_subscribe_payload(), headers=_auth(ALERT_USER_1)
+        )
+        r = await async_client.patch(
+            f"{BASE}/subscription/{ALERT_USER_1}",
+            json={"delivery_time_utc": 24},
+            headers=_auth(ALERT_USER_1),
+        )
+        assert r.status_code == 422

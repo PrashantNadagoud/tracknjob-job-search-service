@@ -16,7 +16,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,7 +39,7 @@ class SubscribeRequest(BaseModel):
     ats_types: list[str] | None = None
     job_search_started_at: datetime | None = None
     motivational_email_enabled: bool = True
-    delivery_time_utc: int = 13
+    delivery_time_utc: int = Field(default=13, ge=0, le=23)
 
 
 class PatchRequest(BaseModel):
@@ -51,7 +51,7 @@ class PatchRequest(BaseModel):
     ats_types: list[str] | None = None
     job_search_started_at: datetime | None = None
     motivational_email_enabled: bool | None = None
-    delivery_time_utc: int | None = None
+    delivery_time_utc: int | None = Field(default=None, ge=0, le=23)
     is_active: bool | None = None
 
 
