@@ -140,7 +140,12 @@ async def cleanup_test_data():
                     "  '00000000-0000-0000-0000-000000000002',"
                     "  'test-alert-user-1',"
                     "  'test-alert-user-2',"
-                    "  'prune-test-user-retention'"
+                    "  'prune-test-user-retention',"
+                    "  'retry-test-user-1',"
+                    "  'retry-test-user-2',"
+                    "  'retry-test-user-3',"
+                    "  'retry-test-user-4',"
+                    "  'retry-test-user-5'"
                     ")"
                 )
             )

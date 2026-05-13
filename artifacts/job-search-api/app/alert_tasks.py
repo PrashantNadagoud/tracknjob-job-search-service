@@ -250,8 +250,9 @@ async def _async_retry_failed_deliveries() -> dict[str, int]:
                     await db.execute(
                         text("""
                             INSERT INTO jobs.alert_deliveries
-                                (subscription_id, jobs_sent, status)
-                            VALUES (:sid, 0, 'skipped_no_matches')
+                                (subscription_id, jobs_sent, status, delivery_date)
+                            VALUES (:sid, 0, 'skipped_no_matches',
+                                    (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date)
                         """),
                         {"sid": sub.id},
                     )
@@ -266,8 +267,9 @@ async def _async_retry_failed_deliveries() -> dict[str, int]:
                     claim = await db.execute(
                         text("""
                             INSERT INTO jobs.alert_deliveries
-                                (subscription_id, jobs_sent, status)
-                            VALUES (:sid, 0, 'sent')
+                                (subscription_id, jobs_sent, status, delivery_date)
+                            VALUES (:sid, 0, 'sent',
+                                    (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date)
                             RETURNING id
                         """),
                         {"sid": sub.id},
@@ -407,8 +409,9 @@ async def _async_send_daily_alerts() -> dict[str, int]:
                     await db.execute(
                         text("""
                             INSERT INTO jobs.alert_deliveries
-                                (subscription_id, jobs_sent, status)
-                            VALUES (:sid, 0, 'skipped_no_matches')
+                                (subscription_id, jobs_sent, status, delivery_date)
+                            VALUES (:sid, 0, 'skipped_no_matches',
+                                    (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date)
                         """),
                         {"sid": sub.id},
                     )
@@ -418,7 +421,7 @@ async def _async_send_daily_alerts() -> dict[str, int]:
                     continue
 
                 # Claim the delivery slot atomically BEFORE sending the email.
-                # The UNIQUE partial index on (subscription_id, delivered_at::date)
+                # The UNIQUE partial index on (subscription_id, delivery_date)
                 # WHERE status='sent' guarantees that only one worker can win the
                 # INSERT; any concurrent worker will hit IntegrityError and skip,
                 # ensuring the email is sent exactly once per subscription per day.
@@ -432,8 +435,9 @@ async def _async_send_daily_alerts() -> dict[str, int]:
                     claim = await db.execute(
                         text("""
                             INSERT INTO jobs.alert_deliveries
-                                (subscription_id, jobs_sent, status)
-                            VALUES (:sid, 0, 'sent')
+                                (subscription_id, jobs_sent, status, delivery_date)
+                            VALUES (:sid, 0, 'sent',
+                                    (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date)
                             RETURNING id
                         """),
                         {"sid": sub.id},
