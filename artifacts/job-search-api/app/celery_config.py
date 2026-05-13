@@ -32,6 +32,11 @@ beat_schedule = {
         "task": "app.alert_tasks.send_daily_alerts",
         "schedule": crontab(minute=0),
     },
+    # Retention — delete alert_deliveries rows older than 90 days
+    "prune-old-deliveries-nightly": {
+        "task": "app.alert_tasks.prune_old_deliveries",
+        "schedule": crontab(minute=30, hour=4),
+    },
 }
 
 # Note: crawl_all_companies is retained as a fallback / manually-triggered task

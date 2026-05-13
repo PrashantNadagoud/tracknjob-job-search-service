@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Listing
@@ -525,6 +526,112 @@ class TestAlertTaskLogic:
             "New hourly send-daily-alerts entry must be present"
         )
         assert beat_schedule["send-daily-alerts"]["task"] == "app.alert_tasks.send_daily_alerts"
+
+    def test_beat_schedule_has_prune_old_deliveries(self):
+        from app.celery_config import beat_schedule
+        assert "prune-old-deliveries-nightly" in beat_schedule, (
+            "Nightly prune-old-deliveries Beat entry must be present"
+        )
+        assert beat_schedule["prune-old-deliveries-nightly"]["task"] == (
+            "app.alert_tasks.prune_old_deliveries"
+        )
+
+    async def test_prune_old_deliveries_removes_old_rows_and_keeps_recent(
+        self, db_session: AsyncSession
+    ):
+        """Rows older than 90 days are deleted; rows within 90 days are kept.
+
+        Patches _make_session to return the test session factory so that
+        _async_prune_old_deliveries executes its production DELETE against the
+        test database — this validates the real SQL, not a duplicate copy.
+        """
+        from datetime import timedelta
+        from tests.conftest import _TestSession
+        from app.alert_tasks import _async_prune_old_deliveries
+
+        sub_id_result = await db_session.execute(
+            text("""
+                INSERT INTO jobs.alert_subscriptions
+                    (user_id, email, is_active, delivery_time_utc)
+                VALUES (:uid, :email, true, 9)
+                ON CONFLICT (user_id) DO UPDATE SET email = EXCLUDED.email
+                RETURNING id
+            """),
+            {"uid": "prune-test-user-retention", "email": "prune@test.com"},
+        )
+        sub_id = sub_id_result.scalar_one()
+        await db_session.commit()
+
+        now = datetime.now(timezone.utc)
+        old_ts = now - timedelta(days=91)
+        recent_ts = now - timedelta(days=10)
+
+        await db_session.execute(
+            text("""
+                INSERT INTO jobs.alert_deliveries
+                    (subscription_id, delivered_at, jobs_sent, status)
+                VALUES (:sid, :ts, 0, 'failed')
+            """),
+            {"sid": str(sub_id), "ts": old_ts},
+        )
+        await db_session.execute(
+            text("""
+                INSERT INTO jobs.alert_deliveries
+                    (subscription_id, delivered_at, jobs_sent, status)
+                VALUES (:sid, :ts, 3, 'sent')
+            """),
+            {"sid": str(sub_id), "ts": recent_ts},
+        )
+        await db_session.commit()
+
+        with patch("app.alert_tasks._make_session", return_value=_TestSession):
+            result = await _async_prune_old_deliveries()
+
+        assert result["deleted"] >= 1, "At least the 91-day-old row must have been deleted"
+
+        remaining = (await db_session.execute(
+            text("""
+                SELECT status FROM jobs.alert_deliveries
+                WHERE subscription_id = :sid
+                  AND delivered_at >= now() - 90 * interval '1 day'
+            """),
+            {"sid": str(sub_id)},
+        )).fetchall()
+        statuses = [r.status for r in remaining]
+        assert "sent" in statuses, "Recent 'sent' row must be preserved"
+
+        gone = (await db_session.execute(
+            text("""
+                SELECT id FROM jobs.alert_deliveries
+                WHERE subscription_id = :sid
+                  AND delivered_at < now() - 90 * interval '1 day'
+            """),
+            {"sid": str(sub_id)},
+        )).fetchall()
+        assert len(gone) == 0, "Old rows must have been deleted"
+
+    async def test_async_prune_returns_deleted_count(self):
+        """_async_prune_old_deliveries returns a dict with 'deleted' key."""
+        from app.alert_tasks import _async_prune_old_deliveries
+
+        mock_result = MagicMock()
+        mock_result.rowcount = 7
+
+        mock_db = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.commit = AsyncMock()
+
+        mock_session_factory = MagicMock()
+        mock_session_factory.return_value = mock_db
+
+        with patch("app.alert_tasks._make_session", return_value=mock_session_factory):
+            result = await _async_prune_old_deliveries()
+
+        assert result == {"deleted": 7}
+        mock_db.execute.assert_called_once()
+        mock_db.commit.assert_called_once()
 
 
 # ── Validation bounds ─────────────────────────────────────────────────────────

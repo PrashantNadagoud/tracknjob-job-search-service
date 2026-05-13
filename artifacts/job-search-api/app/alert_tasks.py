@@ -172,7 +172,37 @@ async def _render_and_send(sub, jobs: list[dict[str, Any]]) -> dict[str, Any]:
         return {"status": "failed", "error_message": str(exc)}
 
 
-# ── Celery task ───────────────────────────────────────────────────────────────
+# ── Celery tasks ──────────────────────────────────────────────────────────────
+
+_DELIVERY_RETENTION_DAYS = 90
+
+
+@celery_app.task(bind=True, max_retries=0, name="app.alert_tasks.prune_old_deliveries")
+def prune_old_deliveries(self) -> dict[str, int]:
+    """Delete alert_deliveries rows older than 90 days.
+
+    Runs nightly via Beat. Keeps the table small so the daily-send guard
+    query stays fast even for subscriptions with many historical 'failed' rows.
+    Returns a dict with key 'deleted' indicating how many rows were removed.
+    """
+    return asyncio.run(_async_prune_old_deliveries())
+
+
+async def _async_prune_old_deliveries() -> dict[str, int]:
+    Session = _make_session()
+    async with Session() as db:
+        result = await db.execute(
+            text("""
+                DELETE FROM jobs.alert_deliveries
+                WHERE delivered_at < now() - :retention * interval '1 day'
+            """),
+            {"retention": _DELIVERY_RETENTION_DAYS},
+        )
+        await db.commit()
+        deleted = result.rowcount
+    logger.info("prune_old_deliveries: deleted %d rows older than %d days", deleted, _DELIVERY_RETENTION_DAYS)
+    return {"deleted": deleted}
+
 
 @celery_app.task(bind=True, max_retries=0, name="app.alert_tasks.send_daily_alerts")
 def send_daily_alerts(self) -> dict[str, int]:

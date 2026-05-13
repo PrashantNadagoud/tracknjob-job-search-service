@@ -138,7 +138,8 @@ async def cleanup_test_data():
                 "  '00000000-0000-0000-0000-000000000001',"
                 "  '00000000-0000-0000-0000-000000000002',"
                 "  'test-alert-user-1',"
-                "  'test-alert-user-2'"
+                "  'test-alert-user-2',"
+                "  'prune-test-user-retention'"
                 ")"
             )
         )
