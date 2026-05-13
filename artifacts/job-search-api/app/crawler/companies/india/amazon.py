@@ -20,7 +20,7 @@ _CAREERS_URL = "https://www.amazon.jobs/en/search?country=IN"
 
 
 class AmazonIndiaCrawler(BaseCrawler):
-    source_label = "Amazon India Careers"
+    source_label = "Official"
     careers_url = _CAREERS_URL
     country = "IN"
 
@@ -82,6 +82,7 @@ class AmazonIndiaCrawler(BaseCrawler):
                     work_type="remote" if is_remote else "",
                     country=self.country,
                 )
+                dept = item.get("business_category") or item.get("job_category") or item.get("category")
                 jobs.append(
                     {
                         "title": title,
@@ -93,6 +94,7 @@ class AmazonIndiaCrawler(BaseCrawler):
                         "posted_at": posted_at,
                         "country": self.country,
                         "geo_restriction": geo_restriction,
+                        "department": dept,
                     }
                 )
             if len(batch) < page_size:
@@ -134,6 +136,11 @@ class AmazonIndiaCrawler(BaseCrawler):
             loc_el = card.find(attrs={"class": lambda c: c and "location" in c.lower()})
             location = loc_el.get_text(strip=True) if loc_el else "India"
 
+            dept_el = card.find(attrs={"class": lambda c: c and "department" in c.lower()}) or \
+                      card.find(attrs={"class": lambda c: c and "team" in c.lower()}) or \
+                      card.find(attrs={"class": lambda c: c and "category" in c.lower()})
+            dept = dept_el.get_text(strip=True) if dept_el else None
+
             is_remote = "remote" in location.lower()
             geo_restriction = classify_listing(
                 location_raw=location,
@@ -152,6 +159,7 @@ class AmazonIndiaCrawler(BaseCrawler):
                     "posted_at": now,
                     "country": self.country,
                     "geo_restriction": geo_restriction,
+                    "department": dept,
                 }
             )
         logger.info("AmazonIndiaCrawler (Playwright): parsed %d jobs", len(jobs))

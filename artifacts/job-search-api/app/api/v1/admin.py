@@ -31,9 +31,29 @@ async def seed_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
             """)
         )
     ).fetchall()
+    
+    source_rows = (
+        await db.execute(
+            text("""
+                SELECT source, status, COUNT(*) AS cnt
+                FROM jobs.company_discovery_queue
+                WHERE source IS NOT NULL
+                GROUP BY source, status
+                ORDER BY source, status
+            """)
+        )
+    ).fetchall()
+    
+    by_source = {}
+    for row in source_rows:
+        if row.source not in by_source:
+            by_source[row.source] = {}
+        by_source[row.source][row.status] = int(row.cnt)
+        
     discovery_queue: dict[str, Any] = {
-        "by_status": {row.status: int(row.cnt) for row in queue_rows},
         "total": sum(int(row.cnt) for row in queue_rows),
+        "by_status": {row.status: int(row.cnt) for row in queue_rows},
+        "by_source": by_source,
     }
 
     ats_total_row = (

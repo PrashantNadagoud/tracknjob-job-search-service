@@ -15,7 +15,7 @@ _CAREERS_URL = "https://razorpay.com/jobs/"
 
 
 class RazorpayCrawler(BaseCrawler):
-    source_label = "Razorpay Careers"
+    source_label = "Official"
     careers_url = _CAREERS_URL
     country = "IN"
 
@@ -77,6 +77,14 @@ class RazorpayCrawler(BaseCrawler):
             )
             location = loc_el.get_text(strip=True) if loc_el else "Bangalore, India"
 
+            dept_el = (
+                card.find(attrs={"class": lambda c: c and "department" in c.lower()}) or \
+                card.find(attrs={"class": lambda c: c and "team" in c.lower()})
+                if card.name != "a"
+                else None
+            )
+            dept = dept_el.get_text(strip=True) if dept_el else None
+
             is_remote = "remote" in location.lower()
             geo_restriction = classify_listing(
                 location_raw=location,
@@ -95,6 +103,7 @@ class RazorpayCrawler(BaseCrawler):
                     "posted_at": now,
                     "country": self.country,
                     "geo_restriction": geo_restriction,
+                    "department": dept,
                 }
             )
 

@@ -13,7 +13,7 @@ _ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/notion"
 
 
 class NotionCrawler(BaseCrawler):
-    source_label = "Notion Careers"
+    source_label = "Official"
     careers_url = "https://www.notion.so/careers"
     country = "US"
 

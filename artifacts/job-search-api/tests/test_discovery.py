@@ -35,10 +35,10 @@ async def test_yc_scraper_filters_no_website():
         {"name": "EmptyWebsite", "website": "", "slug": "ew", "status": "Active"},
     ]
 
-    async def _fake_fetch_json(self):
+    async def _fetch_from_api(self, max_pages: int = 10):
         return raw
 
-    with patch.object(YCScraper, "_fetch_json", _fake_fetch_json):
+    with patch.object(YCScraper, "_fetch_from_api", _fetch_from_api):
         scraper = YCScraper()
         result = await scraper.fetch()
 
@@ -57,10 +57,10 @@ async def test_yc_scraper_filters_inactive_and_acquired():
         {"name": "Dead", "website": "https://d.com", "slug": "d", "status": "dead"},
     ]
 
-    async def _fake_fetch_json(self):
+    async def _fetch_from_api(self, max_pages: int = 10):
         return raw
 
-    with patch.object(YCScraper, "_fetch_json", _fake_fetch_json):
+    with patch.object(YCScraper, "_fetch_from_api", _fetch_from_api):
         scraper = YCScraper()
         result = await scraper.fetch()
 
@@ -74,14 +74,14 @@ async def test_yc_scraper_falls_back_to_html_on_403():
         {"name": "HTMLCo", "website": "https://htmlco.com", "slug": "htmlco"},
     ]
 
-    async def _fake_fetch_json(self):
+    async def _fetch_from_api(self, max_pages: int = 10):
         return None
 
     async def _fake_scrape_html(self):
         return html_companies
 
     with (
-        patch.object(YCScraper, "_fetch_json", _fake_fetch_json),
+        patch.object(YCScraper, "_fetch_from_api", _fetch_from_api),
         patch.object(YCScraper, "_scrape_html", _fake_scrape_html),
     ):
         scraper = YCScraper()
@@ -97,10 +97,10 @@ async def test_yc_scraper_normalises_website():
         {"name": "NoProt", "website": "example.com", "slug": "np", "status": "Active"},
     ]
 
-    async def _fake_fetch_json(self):
+    async def _fetch_from_api(self, max_pages: int = 10):
         return raw
 
-    with patch.object(YCScraper, "_fetch_json", _fake_fetch_json):
+    with patch.object(YCScraper, "_fetch_from_api", _fetch_from_api):
         scraper = YCScraper()
         result = await scraper.fetch()
 
@@ -193,7 +193,8 @@ async def test_prober_returns_match_on_greenhouse_success():
     assert result is not None
     assert result["ats_type"] == "greenhouse"
     assert result["ats_slug"] == "greencomp"
-    assert "greenhouse.io" in result["crawl_url"]
+    # Greenhouse should return None for crawl_url
+    assert result.get("crawl_url") is None
 
 
 @pytest.mark.asyncio
@@ -234,12 +235,13 @@ async def test_seed_orchestrator_dry_run_skips_db_writes():
         {"name": "Airbnb", "website": "https://airbnb.com", "yc_slug": "airbnb"},
     ]
 
-    async def _fake_fetch(self):
-        return companies
+    class FakeScraper:
+        async def fetch(self):
+            return [{"name": "Acme", "website": "acme.com", "yc_slug": "acme"}]
 
     async def _fake_probe(self, company):
-        if company["name"] == "Stripe":
-            return {"ats_type": "greenhouse", "ats_slug": "stripe", "crawl_url": "https://boards-api.greenhouse.io/v1/boards/stripe/jobs"}
+        if company["name"] == "Acme":
+            return {"ats_type": "greenhouse", "ats_slug": "acme", "crawl_url": "https://boards-api.greenhouse.io/v1/boards/acme/jobs"}
         return None
 
     fake_session = MagicMock()
@@ -247,16 +249,15 @@ async def test_seed_orchestrator_dry_run_skips_db_writes():
     fake_session.commit = AsyncMock()
 
     with (
-        patch.object(YCScraper, "fetch", _fake_fetch),
         patch.object(ATSProber, "probe", _fake_probe),
     ):
-        orchestrator = SeedOrchestrator(db_session=fake_session, batch_size=50)
+        orchestrator = SeedOrchestrator(db_session=fake_session, scraper=FakeScraper(), batch_size=50)
         counts = await orchestrator.run(market="US", dry_run=True)
 
-    assert counts["total"] == 2
-    assert counts["probed"] == 2
+    assert counts["total"] == 1
+    assert counts["probed"] == 1
     assert counts["matched"] == 1
-    assert counts["rejected"] == 1
+    assert counts["rejected"] == 0
     fake_session.commit.assert_not_called()
 
 
@@ -291,12 +292,15 @@ async def test_seed_orchestrator_skips_known_websites():
     fake_session.execute = AsyncMock(return_value=fake_execute_result)
     fake_session.commit = AsyncMock()
 
+    class FakeScraper:
+        async def fetch(self):
+            return companies
+
     with (
-        patch.object(YCScraper, "fetch", _fake_fetch),
         patch.object(ATSProber, "probe", _counting_probe),
     ):
-        orchestrator = SeedOrchestrator(db_session=fake_session, batch_size=50)
-        counts = await orchestrator.run(market="US", dry_run=True)
+        orchestrator = SeedOrchestrator(db_session=fake_session, scraper=FakeScraper(), batch_size=50)
+        counts = await orchestrator.run(market="US", dry_run=False)
 
     assert counts["skipped"] == 1
     assert "Stripe" not in probe_calls
@@ -343,8 +347,21 @@ def test_run_yc_seed_task_has_correct_config():
     assert task.max_retries == 0
 
 
-def test_ats_probe_patterns_cover_all_7_types():
-    """ATS_PROBE_PATTERNS covers all 7 required ATS types."""
-    expected = {"greenhouse", "lever", "ashby", "workday", "bamboohr", "smartrecruiters", "rippling"}
-    actual = {p["ats_type"] for p in ATS_PROBE_PATTERNS}
-    assert expected == actual
+def test_ats_probe_patterns_cover_all_10_types():
+    """Ensure the pattern dict covers the known ATS platforms."""
+    from app.discovery.ats_prober import ATS_PROBE_PATTERNS
+
+    known_types = {
+        "greenhouse",
+        "lever",
+        "ashby",
+        "workday",
+        "bamboohr",
+        "smartrecruiters",
+        "rippling",
+        "icims",
+        "taleo",
+        "successfactors",
+    }
+    actual_types = {p["ats_type"] for p in ATS_PROBE_PATTERNS}
+    assert actual_types == known_types

@@ -199,6 +199,7 @@ class AtsSource(Base):
     ats_type: Mapped[str] = mapped_column(Text, nullable=False)
     ats_slug: Mapped[str | None] = mapped_column(Text, nullable=True)
     crawl_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    crawl_config: Mapped[dict | None] = mapped_column(JSONB, server_default="'{}'", nullable=True)
     market: Mapped[str] = mapped_column(Text, server_default="US", nullable=False)
     is_active: Mapped[bool] = mapped_column(
         Boolean, server_default="true", nullable=False

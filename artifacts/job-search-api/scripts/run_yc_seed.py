@@ -58,9 +58,11 @@ def parse_args() -> argparse.Namespace:
 async def run(market: str, dry_run: bool, limit: int | None) -> None:
     from app.db import AsyncSessionFactory
     from app.discovery.seed_orchestrator import SeedOrchestrator
+    from app.discovery.yc_scraper import YCScraper
 
     async with AsyncSessionFactory() as session:
-        orchestrator = SeedOrchestrator(db_session=session, batch_size=50)
+        scraper = YCScraper()
+        orchestrator = SeedOrchestrator(db_session=session, scraper=scraper, batch_size=50)
         counts = await orchestrator.run(market=market, dry_run=dry_run, limit=limit)
 
     print()

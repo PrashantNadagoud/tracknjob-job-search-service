@@ -22,6 +22,7 @@ class JobListingItem(BaseModel):
     salary_range: str | None = None
     country: str = "US"
     last_seen_at: datetime | None = None
+    department: str | None = None
     match_score: int | None = None
     match_label: str | None = None
     company_summary: CompanySummary | None = None
@@ -48,6 +49,7 @@ class JobListingDetail(BaseModel):
     summary: str | None = None
     tags: list[str] | None = None
     salary_range: str | None = None
+    department: str | None = None
     crawled_at: datetime | None = None
     is_active: bool
 

@@ -49,6 +49,7 @@ async def _insert_ats_source(
     ats_type: str = "workday",
     is_active: bool = True,
     last_crawled_at: datetime | None = None,
+    last_crawl_status: str | None = None,
     backoff_until: datetime | None = None,
 ) -> uuid.UUID:
     result = await session.execute(
@@ -56,10 +57,10 @@ async def _insert_ats_source(
             """
             INSERT INTO jobs.ats_sources
                 (company_id, ats_type, ats_slug, market, is_active,
-                 last_crawled_at, backoff_until)
+                 last_crawled_at, last_crawl_status, backoff_until)
             VALUES
                 (:company_id, :ats_type, :ats_slug, :market, :is_active,
-                 :last_crawled_at, :backoff_until)
+                 :last_crawled_at, :last_crawl_status, :backoff_until)
             RETURNING id
             """
         ),
@@ -70,6 +71,7 @@ async def _insert_ats_source(
             "market": "US",
             "is_active": is_active,
             "last_crawled_at": last_crawled_at,
+            "last_crawl_status": last_crawl_status,
             "backoff_until": backoff_until,
         },
     )
@@ -119,6 +121,15 @@ async def _get_listing_active(listing_id: uuid.UUID) -> bool:
         row = await s.execute(
             text("SELECT is_active FROM jobs.listings WHERE id = :id"),
             {"id": listing_id},
+        )
+        return row.scalar_one()
+
+
+async def _get_ats_source_active(ats_source_id: uuid.UUID) -> bool:
+    async with _TestSession() as s:
+        row = await s.execute(
+            text("SELECT is_active FROM jobs.ats_sources WHERE id = :id"),
+            {"id": ats_source_id},
         )
         return row.scalar_one()
 
@@ -382,4 +393,98 @@ class TestCrawlPipelineStaleDeactivation:
         # NOT the pipeline 3-day rule; we verify the pipeline doesn't touch them.
         assert await _get_listing_active(legacy_id) is True, (
             "Legacy (ats_type=NULL) listing should NOT be deactivated by pipeline stale rule"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: reactivate_errored_sources excludes discovery probe AtsSource rows
+# ---------------------------------------------------------------------------
+
+class TestReactivateErroredSources:
+    """_async_reactivate_sources must not reactivate probe AtsSource rows."""
+
+    @pytest.mark.asyncio
+    async def test_legitimate_errored_source_is_reactivated(self):
+        """A real (non-probe) errored source should be reactivated."""
+        from app.crawler.tasks import _async_reactivate_sources
+
+        suffix = uuid.uuid4().hex[:8]
+
+        async with _TestSession() as s:
+            company_id = await _insert_company(s, suffix)
+            src_id = await _insert_ats_source(
+                s,
+                company_id,
+                is_active=False,
+                last_crawl_status="error",
+                last_crawled_at=_now() - timedelta(hours=6),
+            )
+            await s.commit()
+
+        count = await _async_reactivate_sources()
+
+        assert count >= 1, "Expected at least one source reactivated"
+        assert await _get_ats_source_active(src_id) is True, (
+            "Legitimate errored source should be reactivated"
+        )
+
+    @pytest.mark.asyncio
+    async def test_probe_errored_source_is_not_reactivated(self):
+        """A probe AtsSource (company slug ending in '-probe') must NOT be reactivated."""
+        from app.crawler.tasks import _async_reactivate_sources
+
+        suffix = uuid.uuid4().hex[:8]
+        probe_slug = f"test-crawl-co-{suffix}-probe"
+
+        async with _TestSession() as s:
+            # Insert a probe company with slug ending in '-probe'
+            result = await s.execute(
+                text(
+                    """
+                    INSERT INTO jobs.companies (slug, name)
+                    VALUES (:slug, :name)
+                    RETURNING id
+                    """
+                ),
+                {"slug": probe_slug, "name": f"Test Probe Co {suffix}"},
+            )
+            probe_company_id = result.scalar_one()
+
+            probe_src_id = await _insert_ats_source(
+                s,
+                probe_company_id,
+                is_active=False,
+                last_crawl_status="error",
+                last_crawled_at=_now() - timedelta(hours=1),
+            )
+            await s.commit()
+
+        await _async_reactivate_sources()
+
+        assert await _get_ats_source_active(probe_src_id) is False, (
+            "Probe AtsSource (company slug ending in '-probe') must NOT be reactivated"
+        )
+
+    @pytest.mark.asyncio
+    async def test_slug_not_found_source_is_not_reactivated(self):
+        """A source with last_crawl_status='slug_not_found' should not be reactivated."""
+        from app.crawler.tasks import _async_reactivate_sources
+
+        suffix = uuid.uuid4().hex[:8]
+
+        async with _TestSession() as s:
+            company_id = await _insert_company(s, suffix)
+            src_id = await _insert_ats_source(
+                s,
+                company_id,
+                is_active=False,
+                last_crawl_status="slug_not_found",
+                last_crawled_at=_now() - timedelta(hours=6),
+            )
+            await s.commit()
+
+        await _async_reactivate_sources()
+
+        assert await _get_ats_source_active(src_id) is False, (
+            "Source with slug_not_found status should NOT be reactivated"
         )

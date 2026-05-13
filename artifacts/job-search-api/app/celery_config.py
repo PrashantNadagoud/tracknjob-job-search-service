@@ -19,6 +19,10 @@ beat_schedule = {
         "task": "app.crawler.tasks.send_job_alerts",
         "schedule": crontab(minute="*/30"),
     },
+    "reactivate-errored-sources-every-6-hours": {
+        "task": "app.crawler.tasks.reactivate_errored_sources",
+        "schedule": crontab(minute=30, hour="*/6"),
+    },
     "enrich-new-companies-nightly": {
         "task": "app.enrichment.tasks.enrich_new_companies",
         "schedule": crontab(minute=0, hour=2),

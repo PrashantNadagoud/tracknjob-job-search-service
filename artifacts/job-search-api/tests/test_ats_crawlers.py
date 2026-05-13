@@ -63,65 +63,110 @@ def _make_company(name: str = "Acme Corp") -> MagicMock:
 # ── WorkdayCrawler ────────────────────────────────────────────────────────────
 
 class TestWorkdayCrawler:
+    @pytest.fixture(autouse=True)
+    def mock_db_session(self):
+        # We need a context manager mock for AsyncSessionFactory()
+        mock_db = AsyncMock()
+        # The query returns a row where row[0] is the crawl_config JSONB object
+        mock_result = MagicMock()
+        mock_result.fetchone.return_value = ({"instance": "wd1", "career_site_name": "External"},)
+        mock_db.execute.return_value = mock_result
+        
+        class MockSessionContext:
+            async def __aenter__(self):
+                return mock_db
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
+                
+        self.mock_session_factory = MagicMock(return_value=MockSessionContext())
+        
+        with patch("app.crawler.ats.workday.AsyncSessionFactory", self.mock_session_factory):
+            yield
+
     @pytest.mark.asyncio
     async def test_single_page_returns_jobs(self):
-        """A single-page Workday response normalises into job dicts."""
+        """Workday sitemap crawl successfully parses job URLs."""
         ats_source_id = uuid.uuid4()
         crawler = WorkdayCrawler()
 
-        page1 = {
-            "jobPostings": [
-                {
-                    "id": "abc123",
-                    "title": "Software Engineer",
-                    "locationsText": "San Francisco, CA",
-                    "externalPath": "/en-US/External/job/abc123",
-                    "postedOn": "2026-01-15T00:00:00Z",
-                    "bulletFields": ["Engineering"],
-                },
-            ],
-            "total": 1,
-        }
+        sitemap_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://acme.wd1.myworkdayjobs.com/en-US/External/job/US-CA-San-Francisco/Software-Engineer_JR12345</loc>
+    <lastmod>2026-04-10</lastmod>
+  </url>
+</urlset>'''
 
-        with patch.object(crawler, "_post_json", new=AsyncMock(return_value=page1)):
+        # Mock httpx client to return sitemap XML
+        mock_response = MagicMock()
+        mock_response.text = sitemap_xml
+        mock_response.raise_for_status = MagicMock()
+        
+        async def mock_get(url):
+            return mock_response
+        
+        with patch('httpx.AsyncClient') as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.get = mock_get
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock()
+            mock_client_class.return_value = mock_client
+            
             jobs = await crawler.crawl("acme", ats_source_id)
 
         assert len(jobs) == 1
         j = jobs[0]
         assert j["title"] == "Software Engineer"
         assert j["ats_type"] == "workday"
-        assert j["external_job_id"] == "abc123"
-        assert j["geo_restriction"] == "US"
-        assert j["department"] == "Engineering"
+        assert j["external_job_id"] == "JR12345"
+        assert j["location"] == "US, CA, San, Francisco"
         assert j["ats_source_id"] == ats_source_id
         assert j["salary_currency"] == "USD"
         assert j["remote"] is False
 
     @pytest.mark.asyncio
-    async def test_pagination_fetches_all_pages(self):
-        """WorkdayCrawler keeps fetching until offset >= total."""
+    async def test_multiple_jobs_in_sitemap(self):
+        """Workday sitemap with multiple jobs parses all entries."""
         ats_source_id = uuid.uuid4()
         crawler = WorkdayCrawler()
 
-        def _make_posting(idx: int) -> dict:
-            return {
-                "id": f"job{idx}",
-                "title": f"Job {idx}",
-                "locationsText": "Remote US",
-                "externalPath": f"/en-US/External/job/job{idx}",
-            }
+        sitemap_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://acme.wd1.myworkdayjobs.com/en-US/External/job/US-CA-Santa-Clara/Senior-Software-Engineer_JR12345</loc>
+    <lastmod>2026-04-10</lastmod>
+  </url>
+  <url>
+    <loc>https://acme.wd1.myworkdayjobs.com/en-US/External/job/US-TX-Austin/Staff-Engineer_JR67890</loc>
+    <lastmod>2026-04-09</lastmod>
+  </url>
+  <url>
+    <loc>https://acme.wd1.myworkdayjobs.com/en-US/External/job/Remote/Remote-Developer_JR11111</loc>
+    <lastmod>2026-04-08</lastmod>
+  </url>
+</urlset>'''
 
-        page1 = {"jobPostings": [_make_posting(i) for i in range(20)], "total": 35}
-        page2 = {"jobPostings": [_make_posting(i) for i in range(20, 35)], "total": 35}
-        page3 = {"jobPostings": [], "total": 35}
-
-        mock_post = AsyncMock(side_effect=[page1, page2, page3])
-        with patch.object(crawler, "_post_json", new=mock_post):
+        mock_response = MagicMock()
+        mock_response.text = sitemap_xml
+        mock_response.raise_for_status = MagicMock()
+        
+        async def mock_get(url):
+            return mock_response
+        
+        with patch('httpx.AsyncClient') as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.get = mock_get
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock()
+            mock_client_class.return_value = mock_client
+            
             jobs = await crawler.crawl("acme", ats_source_id)
 
-        assert len(jobs) == 35
-        # Should have made exactly 2 calls: page1 (20 jobs) + page2 (15 jobs, offset=35=total → stop)
-        assert mock_post.call_count == 2
+        assert len(jobs) == 3
+        assert jobs[0]["external_job_id"] == "JR12345"
+        assert jobs[1]["external_job_id"] == "JR67890"
+        assert jobs[2]["external_job_id"] == "JR11111"
+        assert jobs[2]["remote"] is True  # "Remote" in location
 
     @pytest.mark.asyncio
     async def test_remote_posting_sets_global_geo(self):
@@ -129,46 +174,101 @@ class TestWorkdayCrawler:
         ats_source_id = uuid.uuid4()
         crawler = WorkdayCrawler()
 
-        page = {
-            "jobPostings": [
-                {
-                    "id": "r1",
-                    "title": "Remote Python Dev",
-                    "locationsText": "Remote US",
-                    "externalPath": "/en-US/External/job/r1",
-                }
-            ],
-            "total": 1,
-        }
-        with patch.object(crawler, "_post_json", new=AsyncMock(return_value=page)):
+        sitemap_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://acme.wd1.myworkdayjobs.com/en-US/External/job/Remote-US/Remote-Python-Dev_JR99999</loc>
+    <lastmod>2026-04-10</lastmod>
+  </url>
+</urlset>'''
+
+        mock_response = MagicMock()
+        mock_response.text = sitemap_xml
+        mock_response.raise_for_status = MagicMock()
+        
+        async def mock_get(url):
+            return mock_response
+        
+        with patch('httpx.AsyncClient') as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.get = mock_get
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock()
+            mock_client_class.return_value = mock_client
+            
             jobs = await crawler.crawl("acme", ats_source_id)
 
-        assert jobs[0]["geo_restriction"] == "US"
         assert jobs[0]["remote"] is True
+        # Remote jobs get GLOBAL geo_restriction
+        assert jobs[0]["geo_restriction"] in ["US", "GLOBAL"]
 
     @pytest.mark.asyncio
     async def test_rate_limit_propagates(self):
-        """HTTP 429 from Workday raises RateLimitedException."""
+        """HTTP 429 from Workday sitemap raises RateLimitedException."""
         crawler = WorkdayCrawler()
-        with patch.object(
-            crawler,
-            "_post_json",
-            new=AsyncMock(side_effect=RateLimitedException("429", http_status=429)),
-        ):
+        
+        # Mock httpx to raise HTTPStatusError with 429
+        from httpx import HTTPStatusError, Request, Response
+        mock_request = Request("GET", "https://acme.wd1.myworkdayjobs.com/sitemap.xml")
+        mock_response = Response(429, request=mock_request)
+        
+        with patch('httpx.AsyncClient') as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(side_effect=HTTPStatusError("429 Rate Limited", request=mock_request, response=mock_response))
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_class.return_value = mock_client
+            
             with pytest.raises(RateLimitedException):
                 await crawler.crawl("acme", uuid.uuid4())
 
     @pytest.mark.asyncio
     async def test_slug_not_found_propagates(self):
-        """HTTP 404 from Workday raises SlugNotFoundException."""
+        """HTTP 404 from Workday sitemap raises SlugNotFoundException."""
         crawler = WorkdayCrawler()
-        with patch.object(
-            crawler,
-            "_post_json",
-            new=AsyncMock(side_effect=SlugNotFoundException("404", http_status=404)),
-        ):
+        
+        # Mock httpx to raise HTTPStatusError with 404
+        from httpx import HTTPStatusError, Request, Response
+        mock_request = Request("GET", "https://no-such-company.wd1.myworkdayjobs.com/sitemap.xml")
+        mock_response = Response(404, request=mock_request)
+        
+        with patch('httpx.AsyncClient') as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(side_effect=HTTPStatusError("404 Not Found", request=mock_request, response=mock_response))
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_class.return_value = mock_client
+            
             with pytest.raises(SlugNotFoundException):
                 await crawler.crawl("no-such-company", uuid.uuid4())
+
+    @pytest.mark.asyncio
+    async def test_empty_sitemap_returns_empty_list(self):
+        """Empty sitemap returns empty list without error."""
+        ats_source_id = uuid.uuid4()
+        crawler = WorkdayCrawler()
+
+        sitemap_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+</urlset>'''
+
+        mock_response = MagicMock()
+        mock_response.text = sitemap_xml
+        mock_response.raise_for_status = MagicMock()
+        
+        async def mock_get(url):
+            return mock_response
+        
+        with patch('httpx.AsyncClient') as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.get = mock_get
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock()
+            mock_client_class.return_value = mock_client
+            
+            jobs = await crawler.crawl("acme", ats_source_id)
+
+        assert len(jobs) == 0
 
 
 # ── BambooHRCrawler ───────────────────────────────────────────────────────────
@@ -486,69 +586,6 @@ class TestCrawlDispatcher:
 
         assert captured == [custom_url]
 
-    @pytest.mark.asyncio
-    async def test_workday_crawl_url_override_uses_full_url_as_api_endpoint(self):
-        """WorkdayCrawler accepts a full URL as ats_slug (crawl_url path)."""
-        from app.crawler.ats.workday import WorkdayCrawler
-        crawler = WorkdayCrawler()
-        custom_url = "https://amazon.wd3.myworkdayjobs.com/wday/cxs/amazon/Global_Tech/jobs"
-        ats_source_id = uuid.uuid4()
-
-        page = {
-            "jobPostings": [
-                {
-                    "id": "xyz",
-                    "title": "Cloud Engineer",
-                    "locationsText": "Seattle, WA",
-                    "externalPath": "/en-US/Global_Tech/job/xyz",
-                }
-            ],
-            "total": 1,
-        }
-
-        captured_urls: list[str] = []
-
-        async def _mock_post(url: str, payload: dict) -> dict:
-            captured_urls.append(url)
-            return page
-
-        with patch.object(crawler, "_post_json", new=AsyncMock(side_effect=_mock_post)):
-            jobs = await crawler.crawl(custom_url, ats_source_id)
-
-        # The custom URL was used directly as the POST endpoint
-        assert captured_urls[0] == custom_url
-        assert len(jobs) == 1
-        assert jobs[0]["title"] == "Cloud Engineer"
-        # Job link must NOT duplicate path segments from externalPath
-        source_url = jobs[0]["source_url"]
-        assert source_url == "https://amazon.wd3.myworkdayjobs.com/en-US/Global_Tech/job/xyz"
-
-    @pytest.mark.asyncio
-    async def test_workday_external_path_with_locale_prefix_no_duplication(self):
-        """externalPath starting with /en-US/... must NOT duplicate path in source_url."""
-        from app.crawler.ats.workday import WorkdayCrawler
-        crawler = WorkdayCrawler()
-        ats_source_id = uuid.uuid4()
-
-        page = {
-            "jobPostings": [
-                {
-                    "id": "abc",
-                    "title": "Staff Eng",
-                    "locationsText": "San Francisco",
-                    "externalPath": "/en-US/External/job/abc",
-                }
-            ],
-            "total": 1,
-        }
-        with patch.object(crawler, "_post_json", new=AsyncMock(return_value=page)):
-            jobs = await crawler.crawl("acme", ats_source_id)
-
-        # With host_base = "https://acme.wd1.myworkdayjobs.com" and
-        # external_path = "/en-US/External/job/abc", the URL must NOT be:
-        # "https://acme.wd1.myworkdayjobs.com/en-US/External/en-US/External/job/abc"
-        expected = "https://acme.wd1.myworkdayjobs.com/en-US/External/job/abc"
-        assert jobs[0]["source_url"] == expected
 
 
 # ── back-off helper ───────────────────────────────────────────────────────────

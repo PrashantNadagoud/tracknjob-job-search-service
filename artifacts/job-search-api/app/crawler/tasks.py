@@ -54,6 +54,7 @@ def _sanitize_job(job: dict[str, Any]) -> dict[str, Any]:
         "posted_at": job.get("posted_at"),
         "country": job.get("country", "US"),
         "geo_restriction": job.get("geo_restriction") or None,
+        "department": job.get("department") or None,
     }
 
 
@@ -988,6 +989,45 @@ async def _async_run_discovery_queue() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # New Celery tasks — ATS pipeline & discovery queue
 # ---------------------------------------------------------------------------
+
+async def _async_reactivate_sources() -> int:
+    """Reactivate ats_sources that were deactivated due to transient errors.
+
+    Only touches rows where is_active=False AND last_crawl_status='error'.
+    Ignores 'slug_not_found' or other permanent rejection statuses.
+
+    Probe AtsSource rows created by the discovery queue (belonging to
+    companies with slugs ending in '-probe') are excluded so they remain
+    hidden from run_crawl_pipeline until the discovery lifecycle promotes
+    or deletes them.
+    """
+    Session = _make_session()
+    async with Session() as session:
+        result = await session.execute(
+            text("""
+                UPDATE jobs.ats_sources AS s
+                SET    is_active = TRUE,
+                       consecutive_failures = 0,
+                       backoff_until = NULL
+                FROM   jobs.companies AS c
+                WHERE  s.company_id = c.id
+                  AND  s.is_active = FALSE
+                  AND  s.last_crawl_status = 'error'
+                  AND  c.slug NOT LIKE '%-probe'
+            """)
+        )
+        await session.commit()
+        count: int = result.rowcount
+        return count
+
+
+@celery_app.task(name="app.crawler.tasks.reactivate_errored_sources")
+def reactivate_errored_sources() -> dict[str, int]:  # type: ignore[override]
+    """Celery task to reactivate sources that failed due to transient issues."""
+    count = asyncio.run(_async_reactivate_sources())
+    logger.info("reactivate_errored_sources: reactivated %d source(s)", count)
+    return {"reactivated_count": count}
+
 
 @celery_app.task(name="app.crawler.tasks.run_crawl_pipeline")
 def run_crawl_pipeline() -> dict[str, Any]:  # type: ignore[override]

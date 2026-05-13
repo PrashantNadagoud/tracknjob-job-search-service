@@ -13,7 +13,7 @@ _GREENHOUSE_API = "https://boards-api.greenhouse.io/v1/boards/cloudflare/jobs"
 
 
 class CloudflareCrawler(BaseCrawler):
-    source_label = "Cloudflare Careers"
+    source_label = "Official"
     careers_url = "https://www.cloudflare.com/careers/jobs/"
     country = "US"
 

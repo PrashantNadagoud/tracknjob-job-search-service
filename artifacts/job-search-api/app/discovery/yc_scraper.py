@@ -13,6 +13,7 @@ Filtered out:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -22,7 +23,7 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-_YC_JSON_URL = "https://www.ycombinator.com/companies.json"
+_YC_API_URL = "https://api.ycombinator.com/v0.1/companies"
 _YC_COMPANIES_URL = "https://www.ycombinator.com/companies"
 
 _EXCLUDED_STATUSES = {"inactive", "acquired", "dead", "exited"}
@@ -61,14 +62,14 @@ class YCScraper:
             "Accept": "application/json, text/html",
         }
 
-    async def fetch(self) -> list[dict[str, Any]]:
+    async def fetch(self, max_pages: int = 100) -> list[dict[str, Any]]:
         """Return a list of company dicts from the YC directory.
 
         Each dict has keys: name, website, yc_slug.
         """
-        companies = await self._fetch_json()
-        if companies is None:
-            logger.warning("YC JSON endpoint unavailable; falling back to HTML scrape")
+        companies = await self._fetch_from_api(max_pages=max_pages)
+        if not companies:
+            logger.warning("YC API returned no companies; falling back to HTML scrape")
             companies = await self._scrape_html()
 
         result: list[dict[str, Any]] = []
@@ -89,31 +90,53 @@ class YCScraper:
         logger.info("YCScraper: %d companies after filtering", len(result))
         return result
 
-    async def _fetch_json(self) -> list[dict[str, Any]] | None:
+    async def _fetch_from_api(self, max_pages: int = 10) -> list[dict[str, Any]]:
+        """Fetch companies from the YC public API with pagination."""
+        all_companies: list[dict[str, Any]] = []
+        
         try:
             async with httpx.AsyncClient(
                 timeout=_TIMEOUT,
-                follow_redirects=False,
+                follow_redirects=True,
                 limits=_CLIENT_LIMITS,
                 headers=self._headers,
             ) as client:
-                resp = await client.get(_YC_JSON_URL)
-                if resp.status_code in (403, 404, 429):
-                    logger.debug(
-                        "YC JSON returned %s; will try HTML fallback", resp.status_code
+                for page in range(1, max_pages + 1):
+                    logger.info("Fetching YC API page %d...", page)
+                    resp = await client.get(
+                        _YC_API_URL, 
+                        params={"page": page, "per_page": 100}
                     )
-                    return None
-                resp.raise_for_status()
-                data = resp.json()
-                if isinstance(data, list):
-                    return data
-                if isinstance(data, dict) and "companies" in data:
-                    return data["companies"]
-                logger.debug("Unexpected JSON shape from YC; falling back to HTML")
-                return None
+                    
+                    if resp.status_code != 200:
+                        logger.debug("YC API returned %s on page %d", resp.status_code, page)
+                        break
+                        
+                    data = resp.json()
+                    page_companies = []
+                    
+                    if isinstance(data, list):
+                        page_companies = data
+                    elif isinstance(data, dict):
+                        # Handle different possible JSON shapes
+                        page_companies = data.get("companies") or data.get("results") or data.get("data") or []
+                    
+                    if not page_companies:
+                        logger.debug("No more companies found on page %d", page)
+                        break
+                        
+                    logger.info("Page %d returned %d companies", page, len(page_companies))
+                    if page_companies:
+                        logger.info("Sample company keys: %s", list(page_companies[0].keys()))
+                    all_companies.extend(page_companies)
+                    
+                    # Small delay between pages
+                    await asyncio.sleep(0.5)
+                    
+            return all_companies
         except Exception as exc:
-            logger.debug("YC JSON fetch failed: %s", exc)
-            return None
+            logger.error("YC API fetch failed: %s", exc, exc_info=True)
+            return []
 
     async def _scrape_html(self) -> list[dict[str, Any]]:
         """Scrape the YC companies HTML page for data attributes."""
