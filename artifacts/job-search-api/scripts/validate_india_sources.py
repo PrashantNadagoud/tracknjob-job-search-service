@@ -74,41 +74,59 @@ def _try_workday_cxs(
     site_name: str,
     location_filter: str | None,
 ) -> dict[str, Any] | None:
-    """POST one CXS probe. Returns dict on success, None on any failure."""
+    """POST one CXS probe. Returns dict on success, None on any failure.
+
+    When a location_filter is supplied we try it first; if the server returns
+    422 (common when the plain-text location name is not a valid Workday facet
+    ID), we retry the same endpoint without any filter.  A 200 response that
+    contains a ``jobPostings`` key is sufficient to confirm the endpoint is
+    live — the crawler applies the location filter at crawl time using the
+    stored location_filter value.
+    """
     url = (
         f"https://{slug}.{instance}.myworkdayjobs.com"
         f"/wday/cxs/{slug}/{site_name}/jobs"
     )
-    body: dict[str, Any] = {"limit": 5, "offset": 0}
-    if location_filter:
-        body["appliedFacets"] = {"Location": [location_filter]}
-
     headers = {
         "User-Agent": _BROWSER_UA,
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
-    try:
-        resp = httpx.post(url, json=body, headers=headers, timeout=_TIMEOUT)
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get("jobPostings") is not None:
-                career_url = (
-                    f"https://{slug}.{instance}.myworkdayjobs.com/{site_name}"
-                )
-                logger.info(
-                    "Workday %s validated: %s/%s (%d postings)",
-                    slug, instance, site_name, len(data["jobPostings"]),
-                )
-                time.sleep(1)
-                return {
-                    "active": True,
-                    "career_site_url": career_url,
-                    "crawl_config": {"instance": instance, "career_site_name": site_name},
-                }
-    except Exception as exc:
-        logger.debug("Workday CXS probe %s/%s/%s failed: %s", slug, instance, site_name, exc)
-    # One sleep per attempt on all non-success paths (non-200, no postings, exception).
+
+    bodies_to_try: list[dict[str, Any]] = []
+    if location_filter:
+        bodies_to_try.append({"limit": 5, "offset": 0,
+                               "appliedFacets": {"Location": [location_filter]}})
+    bodies_to_try.append({"limit": 5, "offset": 0})
+
+    for body in bodies_to_try:
+        try:
+            resp = httpx.post(url, json=body, headers=headers, timeout=_TIMEOUT)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("jobPostings") is not None:
+                    career_url = (
+                        f"https://{slug}.{instance}.myworkdayjobs.com/{site_name}"
+                    )
+                    logger.info(
+                        "Workday %s validated: %s/%s (%d postings)",
+                        slug, instance, site_name, len(data["jobPostings"]),
+                    )
+                    time.sleep(1)
+                    return {
+                        "active": True,
+                        "career_site_url": career_url,
+                        "crawl_config": {"instance": instance, "career_site_name": site_name},
+                    }
+            elif resp.status_code in (404, 403):
+                # Wrong instance/site_name — no point retrying without filter.
+                break
+            # 422 with filter → fall through to retry without filter
+        except Exception as exc:
+            logger.debug("Workday CXS probe %s/%s/%s failed: %s", slug, instance, site_name, exc)
+            break
+
+    # One sleep per slug+instance+site_name combination on all non-success paths.
     time.sleep(1)
     return None
 
@@ -241,8 +259,8 @@ async def run(dry_run: bool, limit: int | None) -> None:
                         last_crawl_status = :status,
                         career_site_url   = COALESCE(:url, career_site_url),
                         crawl_config      = CASE
-                                               WHEN :crawl_config::text IS NOT NULL
-                                               THEN :crawl_config::jsonb
+                                               WHEN CAST(:crawl_config AS text) IS NOT NULL
+                                               THEN CAST(:crawl_config AS jsonb)
                                                ELSE crawl_config
                                            END,
                         updated_at        = now()

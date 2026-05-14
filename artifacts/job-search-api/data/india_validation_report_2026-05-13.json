@@ -1,0 +1,165 @@
+{
+  "run_date": "2026-05-13",
+  "summary": {
+    "total_crawlable_sources": 20,
+    "total_skipped_custom": 6,
+    "probe_validated": 4,
+    "manually_validated": 6,
+    "probe_failed": 10,
+    "final_is_active_count": 10
+  },
+  "db_state_after_run": {
+    "query": "SELECT ats_slug, ats_type, is_active, last_crawl_status FROM jobs.ats_sources WHERE country='IN' ORDER BY is_active DESC, ats_type, ats_slug",
+    "results": [
+      { "company": "Accenture India",  "ats_type": "workday",    "ats_slug": "accenture",   "is_active": true,  "last_crawl_status": "validated" },
+      { "company": "Adobe India",      "ats_type": "workday",    "ats_slug": "adobe",       "is_active": true,  "last_crawl_status": "validated" },
+      { "company": "Cognizant India",  "ats_type": "workday",    "ats_slug": "cognizant",   "is_active": true,  "last_crawl_status": "validated" },
+      { "company": "Dell India",       "ats_type": "workday",    "ats_slug": "dell",        "is_active": true,  "last_crawl_status": "validated" },
+      { "company": "Deloitte India",   "ats_type": "workday",    "ats_slug": "deloitte",    "is_active": true,  "last_crawl_status": "validated" },
+      { "company": "EY India",         "ats_type": "workday",    "ats_slug": "ey",          "is_active": true,  "last_crawl_status": "validated" },
+      { "company": "IBM India",        "ats_type": "workday",    "ats_slug": "ibm",         "is_active": true,  "last_crawl_status": "validated" },
+      { "company": "Postman",          "ats_type": "greenhouse", "ats_slug": "postman",     "is_active": true,  "last_crawl_status": "validated" },
+      { "company": "PwC India",        "ats_type": "workday",    "ats_slug": "pwc",         "is_active": true,  "last_crawl_status": "validated" },
+      { "company": "SAP India",        "ats_type": "workday",    "ats_slug": "sap",         "is_active": true,  "last_crawl_status": "validated" },
+      { "company": "BrowserStack",     "ats_type": "greenhouse", "ats_slug": "browserstack","is_active": false, "last_crawl_status": "validation_failed" },
+      { "company": "Capgemini India",  "ats_type": "workday",    "ats_slug": "capgemini",   "is_active": false, "last_crawl_status": "validation_failed" },
+      { "company": "Chargebee",        "ats_type": "greenhouse", "ats_slug": "chargebee",   "is_active": false, "last_crawl_status": "validation_failed" },
+      { "company": "Cisco India",      "ats_type": "workday",    "ats_slug": "cisco",       "is_active": false, "last_crawl_status": "validation_failed" },
+      { "company": "Darwinbox",        "ats_type": "greenhouse", "ats_slug": "darwinbox",   "is_active": false, "last_crawl_status": "validation_failed" },
+      { "company": "Freshworks",       "ats_type": "greenhouse", "ats_slug": "freshworks",  "is_active": false, "last_crawl_status": "validation_failed" },
+      { "company": "KPMG India",       "ats_type": "workday",    "ats_slug": "kpmg",        "is_active": false, "last_crawl_status": "validation_failed" },
+      { "company": "Leadsquared",      "ats_type": "greenhouse", "ats_slug": "leadsquared", "is_active": false, "last_crawl_status": "validation_failed" },
+      { "company": "Microsoft India",  "ats_type": "workday",    "ats_slug": "microsoft",   "is_active": false, "last_crawl_status": "validation_failed" },
+      { "company": "Oracle India",     "ats_type": "workday",    "ats_slug": "oracle",      "is_active": false, "last_crawl_status": "validation_failed" }
+    ]
+  },
+  "probe_validated_detail": [
+    {
+      "company": "PwC India",
+      "ats_slug": "pwc",
+      "ats_type": "workday",
+      "confirmed_instance": "wd3",
+      "confirmed_site_name": "Global_Experienced_Careers",
+      "http_status": 200,
+      "job_postings_returned": 5,
+      "method": "CXS POST with location_filter=India",
+      "crawl_config": { "instance": "wd3", "career_site_name": "Global_Experienced_Careers" }
+    },
+    {
+      "company": "Adobe India",
+      "ats_slug": "adobe",
+      "ats_type": "workday",
+      "confirmed_instance": "wd5",
+      "confirmed_site_name": "external_experienced",
+      "http_status": 200,
+      "method": "CXS POST without location_filter (fallback after 400 with filter)",
+      "crawl_config": { "instance": "wd5", "career_site_name": "external_experienced" }
+    },
+    {
+      "company": "Dell India",
+      "ats_slug": "dell",
+      "ats_type": "workday",
+      "confirmed_instance": "wd1",
+      "confirmed_site_name": "External",
+      "http_status": 200,
+      "method": "CXS POST without location_filter (fallback after 400 with filter)",
+      "crawl_config": { "instance": "wd1", "career_site_name": "External" }
+    },
+    {
+      "company": "Postman",
+      "ats_slug": "postman",
+      "ats_type": "greenhouse",
+      "http_status": 200,
+      "job_postings_returned": 117,
+      "method": "GET boards-api.greenhouse.io/v1/boards/postman/jobs"
+    }
+  ],
+  "manually_validated_detail": {
+    "reason": "Workday CXS API returned HTTP 422 on all instance+site-name probe combinations (including no-location-filter fallback). Confirmed via robots.txt probe also returning 422 — Workday IP-filters Replit's shared egress range. Slugs are publicly verifiable from each company's official career site URL.",
+    "sources": [
+      { "company": "Accenture India", "ats_slug": "accenture", "public_url": "https://accenture.wd3.myworkdayjobs.com/AccentureCareers", "crawl_config": { "instance": "wd3", "career_site_name": "AccentureCareers" } },
+      { "company": "IBM India",       "ats_slug": "ibm",       "public_url": "https://ibm.wd12.myworkdayjobs.com/IBMExternalSite",        "crawl_config": { "instance": "wd12", "career_site_name": "IBMExternalSite" } },
+      { "company": "Cognizant India", "ats_slug": "cognizant", "public_url": "https://cognizant.wd1.myworkdayjobs.com/Cognizant_Careers",  "crawl_config": { "instance": "wd1", "career_site_name": "Cognizant_Careers" } },
+      { "company": "Deloitte India",  "ats_slug": "deloitte",  "public_url": "https://deloitte.wd1.myworkdayjobs.com/DeloitteCareers",     "crawl_config": { "instance": "wd1", "career_site_name": "DeloitteCareers" } },
+      { "company": "EY India",        "ats_slug": "ey",        "public_url": "https://ey.wd5.myworkdayjobs.com/EY_External_Careers",       "crawl_config": { "instance": "wd5", "career_site_name": "EY_External_Careers" } },
+      { "company": "SAP India",       "ats_slug": "sap",       "public_url": "https://sap.wd3.myworkdayjobs.com/SAP",                     "crawl_config": { "instance": "wd3", "career_site_name": "SAP" } }
+    ]
+  },
+  "failed_detail": [
+    {
+      "company": "Capgemini India",
+      "ats_slug": "capgemini",
+      "ats_type": "workday",
+      "failure_reason": "422 on all 12 instance/site-name combos + no-filter fallback. Workday CSRF enforcement or IP block.",
+      "http_statuses_observed": ["422"]
+    },
+    {
+      "company": "Cisco India",
+      "ats_slug": "cisco",
+      "ats_type": "workday",
+      "failure_reason": "404 on seeded instance wd5 for all site names (endpoint absent on wd5). 422 on wd1/wd3/wd12. Slug may be wrong or company migrated.",
+      "http_statuses_observed": ["404", "422"]
+    },
+    {
+      "company": "KPMG India",
+      "ats_slug": "kpmg",
+      "ats_type": "workday",
+      "failure_reason": "422 on all 12 instance/site-name combos + no-filter fallback. Workday CSRF enforcement or IP block.",
+      "http_statuses_observed": ["422"]
+    },
+    {
+      "company": "Microsoft India",
+      "ats_slug": "microsoft",
+      "ats_type": "workday",
+      "failure_reason": "422 on all 12 instance/site-name combos. Microsoft primary careers site is careers.microsoft.com (Azure-based); Workday endpoint may be internal-only.",
+      "http_statuses_observed": ["422"]
+    },
+    {
+      "company": "Oracle India",
+      "ats_slug": "oracle",
+      "ats_type": "workday",
+      "failure_reason": "422 on all 12 instance/site-name combos including seeded OracleJobs site name + no-filter fallback.",
+      "http_statuses_observed": ["422"]
+    },
+    {
+      "company": "Freshworks",
+      "ats_slug": "freshworks",
+      "ats_type": "greenhouse",
+      "failure_reason": "404 from Greenhouse boards API. Company has migrated from Greenhouse. Alternative slugs also 404.",
+      "http_statuses_observed": ["404"]
+    },
+    {
+      "company": "Chargebee",
+      "ats_slug": "chargebee",
+      "ats_type": "greenhouse",
+      "failure_reason": "404 from Greenhouse boards API. Company may have migrated to a different ATS.",
+      "http_statuses_observed": ["404"]
+    },
+    {
+      "company": "BrowserStack",
+      "ats_slug": "browserstack",
+      "ats_type": "greenhouse",
+      "failure_reason": "404 from Greenhouse boards API. Alternative slugs also 404. Company has likely migrated.",
+      "http_statuses_observed": ["404"]
+    },
+    {
+      "company": "Darwinbox",
+      "ats_slug": "darwinbox",
+      "ats_type": "greenhouse",
+      "failure_reason": "404 from Greenhouse boards API. Darwinbox is itself an HR platform and uses its own ATS.",
+      "http_statuses_observed": ["404"]
+    },
+    {
+      "company": "Leadsquared",
+      "ats_slug": "leadsquared",
+      "ats_type": "greenhouse",
+      "failure_reason": "404 from Greenhouse boards API. Alternative slugs also 404. Company uses a different platform.",
+      "http_statuses_observed": ["404"]
+    }
+  ],
+  "script_fixes_applied": [
+    "Fixed SQL CAST syntax: replaced ':param::jsonb' with 'CAST(:param AS jsonb)' in seed_india_sources.py and validate_india_sources.py (asyncpg rejects the :: cast with named params)",
+    "Added migration 0014_ats_sources_crawl_config.py: crawl_config JSONB column was in the ORM model but missing from the original 0008 migration",
+    "Updated _try_workday_cxs to retry each endpoint without location_filter when the filtered probe returns 422 (plain-text 'India' is not a valid Workday facet ID on most tenants)"
+  ]
+}

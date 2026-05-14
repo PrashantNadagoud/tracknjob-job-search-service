@@ -134,7 +134,7 @@ async def run(dry_run: bool) -> None:
                         SET career_site_url  = :career_site_url,
                             location_filter  = :location_filter,
                             notes            = :notes,
-                            crawl_config     = COALESCE(:crawl_config::jsonb, crawl_config),
+                            crawl_config     = COALESCE(CAST(:crawl_config AS jsonb), crawl_config),
                             updated_at       = now()
                         WHERE id = :id
                     """),
@@ -157,7 +157,7 @@ async def run(dry_run: bool) -> None:
                              is_active, last_crawl_status)
                         VALUES
                             (:company_id, :ats_type, :ats_slug, :career_site_url,
-                             :country, :location_filter, :notes, :crawl_config::jsonb,
+                             :country, :location_filter, :notes, CAST(:crawl_config AS jsonb),
                              false, 'pending_validation')
                     """),
                     {
