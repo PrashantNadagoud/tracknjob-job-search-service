@@ -131,6 +131,23 @@ class TestSearch:
         body = resp.json()
         assert body["total"] == 4
 
+    async def test_search_country_omitted_returns_all(
+        self, async_client, auth_headers, db_session: AsyncSession
+    ):
+        src = f"test-comit-{uuid.uuid4().hex[:8]}"
+        for i in range(2):
+            db_session.add(_job(suffix=f"{src}-us{i}", source_label=src, country="US"))
+        for i in range(2):
+            db_session.add(_job(suffix=f"{src}-in{i}", source_label=src, country="IN"))
+        await db_session.commit()
+
+        resp = await async_client.get(
+            f"/api/v1/jobs/search?source={src}", headers=auth_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 4
+
     async def test_search_excludes_inactive_jobs(
         self, async_client, auth_headers, db_session: AsyncSession
     ):

@@ -115,7 +115,10 @@ async def search_jobs(
     source: str | None = Query(default=None, description="Filter by source_label"),
     company: str | None = Query(default=None, description="Filter by company name (partial match)"),
     posted: PostedFilter = Query(default=PostedFilter.any, description="Filter by posted_at recency"),
-    country: str = Query(default="US", description="Country filter: US, IN, or ALL"),
+    country: str | None = Query(
+        default=None,
+        description="Filter by country code: US or IN. Omit (or pass ALL) to return listings from all countries.",
+    ),
     market: str | None = Query(
         default=None,
         description=(
@@ -162,7 +165,7 @@ async def _execute_search(
     source: str | None,
     company: str | None,
     posted: PostedFilter,
-    country: str,
+    country: str | None,
     market: str | None,
     sort_by: SortBy,
     page: int,
@@ -213,9 +216,10 @@ async def _execute_search(
     if company:
         stmt = stmt.where(Listing.company.ilike(f"%{company}%"))
 
-    country_upper = country.upper()
-    if country_upper in ("US", "IN"):
-        stmt = stmt.where(Listing.country == country_upper)
+    if country is not None:
+        country_upper = country.upper()
+        if country_upper in ("US", "IN"):
+            stmt = stmt.where(Listing.country == country_upper)
 
     if posted != PostedFilter.any:
         cutoff = datetime.now(timezone.utc) - _POSTED_CUTOFFS[posted.value]
