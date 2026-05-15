@@ -141,23 +141,23 @@
   },
   {
     "company_name": "Freshworks",
-    "ats_type": "greenhouse",
-    "ats_slug": "freshworks",
-    "career_site_url": "https://boards.greenhouse.io/freshworks",
+    "ats_type": "custom",
+    "ats_slug": null,
+    "career_site_url": "https://careers.freshworks.com",
     "country": "IN",
     "location_filter": null,
-    "validation_status": "probe_failed",
-    "notes": "Probe failed: Greenhouse boards API returned HTTP 404 for slug 'freshworks'. Company has likely migrated to a different ATS. Alternative slugs (freshworksinc, freshworks-inc, freshworks1) also returned 404. Needs slug correction."
+    "validation_status": "not_crawlable",
+    "notes": "Migrated away from Greenhouse. careers.freshworks.com now routes to SmartRecruiters (27 active jobs confirmed via SmartRecruiters API). SmartRecruiters not supported by current crawler stack. Lever account exists but has 0 postings. Source deactivated as not_crawlable."
   },
   {
     "company_name": "Chargebee",
-    "ats_type": "greenhouse",
-    "ats_slug": "chargebee",
-    "career_site_url": "https://boards.greenhouse.io/chargebee",
+    "ats_type": "custom",
+    "ats_slug": null,
+    "career_site_url": "https://www.chargebee.com/careers/",
     "country": "IN",
     "location_filter": null,
-    "validation_status": "probe_failed",
-    "notes": "Probe failed: Greenhouse boards API returned HTTP 404 for slug 'chargebee'. Company may have migrated to a different ATS platform. Needs slug verification or ATS type correction."
+    "validation_status": "not_crawlable",
+    "notes": "Migrated away from Greenhouse. chargebee.com/careers page references Ashby in HTML, but no valid Ashby board slug found via API (chargebee / chargebee-inc / chargebeehq all returned 404). SmartRecruiters account exists with 0 postings. Possible private or embedded board. Source deactivated as not_crawlable."
   },
   {
     "company_name": "Postman",
@@ -171,33 +171,33 @@
   },
   {
     "company_name": "BrowserStack",
-    "ats_type": "greenhouse",
-    "ats_slug": "browserstack",
-    "career_site_url": "https://boards.greenhouse.io/browserstack",
+    "ats_type": "custom",
+    "ats_slug": null,
+    "career_site_url": "https://www.browserstack.com/careers",
     "country": "IN",
     "location_filter": null,
-    "validation_status": "probe_failed",
-    "notes": "Probe failed: Greenhouse boards API returned HTTP 404 for slug 'browserstack'. Alternative slugs (browserstackltd, browserstack1) also returned 404. Company has likely migrated away from Greenhouse."
+    "validation_status": "not_crawlable",
+    "notes": "Migrated away from Greenhouse. browserstack.com/careers is self-hosted (WordPress). No detectable ATS integration found across Greenhouse, Lever, Ashby, Workday, BambooHR, and SmartRecruiters (0 postings). Source deactivated as not_crawlable."
   },
   {
     "company_name": "Darwinbox",
-    "ats_type": "greenhouse",
-    "ats_slug": "darwinbox",
-    "career_site_url": "https://boards.greenhouse.io/darwinbox",
+    "ats_type": "custom",
+    "ats_slug": null,
+    "career_site_url": "https://darwinbox.com/careers",
     "country": "IN",
     "location_filter": null,
-    "validation_status": "probe_failed",
-    "notes": "Probe failed: Greenhouse boards API returned HTTP 404 for slug 'darwinbox'. Darwinbox is itself an HR/ATS platform and almost certainly uses its own internal system rather than Greenhouse."
+    "validation_status": "not_crawlable",
+    "notes": "Migrated away from Greenhouse. Darwinbox is itself an HRMS/ATS platform and uses its own internal system for hiring (confirmed: darwinbox.com/careers). No third-party ATS detected. Source deactivated as not_crawlable."
   },
   {
     "company_name": "Leadsquared",
-    "ats_type": "greenhouse",
-    "ats_slug": "leadsquared",
-    "career_site_url": "https://boards.greenhouse.io/leadsquared",
+    "ats_type": "custom",
+    "ats_slug": null,
+    "career_site_url": "https://www.leadsquared.com/careers/",
     "country": "IN",
     "location_filter": null,
-    "validation_status": "probe_failed",
-    "notes": "Probe failed: Greenhouse boards API returned HTTP 404 for slug 'leadsquared'. Alternative slugs (leadsquared1, leadsquaredinc) also returned 404. Company may use a custom portal or different ATS."
+    "validation_status": "not_crawlable",
+    "notes": "Migrated away from Greenhouse. leadsquared.com/careers uses a custom portal. Lever, Ashby (leadsquared / leadsquaredtech / lsq), SmartRecruiters, and BambooHR all returned 404. No crawlable ATS found. Source deactivated as not_crawlable."
   },
   {
     "company_name": "TCS",

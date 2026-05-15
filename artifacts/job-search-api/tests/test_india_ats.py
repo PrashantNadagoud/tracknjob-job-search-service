@@ -97,7 +97,7 @@ class TestIndiaSeedData:
 
     def test_at_least_one_greenhouse_record(self):
         gh = [r for r in self.records if r["ats_type"] == "greenhouse"]
-        assert len(gh) >= 3
+        assert len(gh) >= 1
 
     def test_at_least_one_custom_record(self):
         custom = [r for r in self.records if r["ats_type"] == "custom"]
