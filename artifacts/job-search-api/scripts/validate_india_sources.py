@@ -336,8 +336,9 @@ def _probe(
         return {"active": False, "career_site_url": None, "crawl_config": None}
 
 
-async def run(dry_run: bool, limit: int | None) -> None:
+async def run(dry_run: bool, limit: int | None, slug: str | None = None) -> None:
     async with AsyncSessionFactory() as db:
+        slug_clause = " AND ats_slug = :slug" if slug else ""
         query = text("""
             SELECT id, ats_type, ats_slug, location_filter, company_id,
                    career_site_url
@@ -345,10 +346,11 @@ async def run(dry_run: bool, limit: int | None) -> None:
             WHERE country = 'IN'
               AND is_active = false
               AND ats_slug IS NOT NULL
+        """ + slug_clause + """
             ORDER BY created_at
         """ + (f" LIMIT {int(limit)}" if limit else ""))
 
-        rows = (await db.execute(query)).fetchall()
+        rows = (await db.execute(query, {"slug": slug} if slug else {})).fetchall()
 
     if not rows:
         print("No pending India sources to validate.")
@@ -411,8 +413,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Validate India ATS sources")
     ap.add_argument("--dry-run", action="store_true", help="No DB writes")
     ap.add_argument("--limit", type=int, default=None, help="Max sources to probe")
+    ap.add_argument("--slug", type=str, default=None, help="Validate only this ats_slug")
     args = ap.parse_args()
-    asyncio.run(run(dry_run=args.dry_run, limit=args.limit))
+    asyncio.run(run(dry_run=args.dry_run, limit=args.limit, slug=args.slug))
 
 
 if __name__ == "__main__":
