@@ -5,6 +5,14 @@ Strategy (chosen per source):
   (paginated POST to /wday/cxs/{slug}/{site}/jobs)
 - If location_filter is null         → sitemap.xml approach (existing behaviour)
   (more reliable for sources where CSRF tokens are not needed)
+
+CSRF handling:
+  Some Workday instances enforce CSRF protection on the CXS endpoint.
+  When a 403 or 422 is returned on the first POST, the crawler does a
+  preliminary GET to the job-board HTML page to harvest the session
+  cookies and CSRF token (CALYPSO_CSRF_TOKEN or similar), then retries
+  the POST with those cookies and an X-CSRF-Token header.  This retry
+  only happens once per crawl to avoid infinite loops.
 """
 
 import logging
@@ -19,14 +27,64 @@ from app.db import AsyncSessionFactory
 
 logger = logging.getLogger(__name__)
 
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
 _BROWSER_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": _BROWSER_UA,
     "Accept": "application/json, text/html,*/*",
-    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Language": "en-US,en;q=0.9",
 }
+
+_CSRF_COOKIE_NAMES = ("CALYPSO_CSRF_TOKEN", "csrf-token", "wd-csrf-token", "CSRF-TOKEN")
+_CSRF_HEADER_NAMES = ("x-csrf-token", "X-CSRF-Token")
+
+
+async def _fetch_csrf_token(
+    client: Any,
+    slug: str,
+    instance: str,
+    career_site_name: str,
+) -> tuple[str | None, dict]:
+    """GET the Workday job-board page to harvest session cookies + CSRF token.
+
+    Returns (csrf_token_or_None, cookies_dict).  Never raises — errors are
+    swallowed so the caller can decide whether to proceed without CSRF.
+    """
+    page_url = (
+        f"https://{slug}.{instance}.myworkdayjobs.com/{career_site_name}/jobs"
+    )
+    try:
+        resp = await client.get(
+            page_url,
+            headers={
+                "User-Agent": _BROWSER_UA,
+                "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        cookies = dict(resp.cookies)
+        for name in _CSRF_COOKIE_NAMES:
+            token = cookies.get(name)
+            if token:
+                logger.debug(
+                    "CSRF token found in cookie %r for %s/%s", name, slug, instance
+                )
+                return token, cookies
+        for name in _CSRF_HEADER_NAMES:
+            token = resp.headers.get(name)
+            if token:
+                logger.debug(
+                    "CSRF token found in header %r for %s/%s", name, slug, instance
+                )
+                return token, cookies
+        logger.debug("No CSRF token in GET response for %s/%s; proceeding without", slug, instance)
+        return None, cookies
+    except Exception as exc:
+        logger.debug("CSRF GET failed for %s/%s: %s", slug, instance, exc)
+        return None, {}
 
 
 class WorkdayCrawler(BaseATSCrawler):
@@ -76,16 +134,23 @@ class WorkdayCrawler(BaseATSCrawler):
 
         base_url = f"https://{ats_slug}.{instance}.myworkdayjobs.com"
         api_url = f"{base_url}/wday/cxs/{ats_slug}/{career_site_name}/jobs"
+        referer = f"{base_url}/{career_site_name}/jobs"
 
         jobs: list[dict[str, Any]] = []
         offset = 0
         limit = 20
 
-        headers = {**_BROWSER_HEADERS, "Content-Type": "application/json"}
+        post_headers: dict[str, str] = {
+            **_BROWSER_HEADERS,
+            "Content-Type": "application/json",
+            "Referer": referer,
+        }
+        extra_cookies: dict = {}
+        csrf_fetched = False
 
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0),
-            headers=headers,
+            follow_redirects=True,
         ) as client:
             while True:
                 body: dict[str, Any] = {
@@ -94,9 +159,33 @@ class WorkdayCrawler(BaseATSCrawler):
                     "offset": offset,
                 }
                 try:
-                    resp = await client.post(api_url, json=body)
+                    resp = await client.post(
+                        api_url,
+                        json=body,
+                        headers=post_headers,
+                        cookies=extra_cookies,
+                    )
                 except Exception as exc:
                     raise CrawlException(f"CXS request failed for {ats_slug}: {exc}")
+
+                # ── CSRF retry (once only) ─────────────────────────────────
+                if resp.status_code in (403, 422) and not csrf_fetched:
+                    csrf_fetched = True
+                    csrf_token, extra_cookies = await _fetch_csrf_token(
+                        client, ats_slug, instance, career_site_name
+                    )
+                    if csrf_token:
+                        post_headers = {**post_headers, "X-CSRF-Token": csrf_token}
+                        logger.info(
+                            "workday CXS: CSRF token acquired for %s/%s — retrying",
+                            ats_slug, instance,
+                        )
+                    else:
+                        logger.debug(
+                            "workday CXS: no CSRF token found for %s/%s — retrying anyway",
+                            ats_slug, instance,
+                        )
+                    continue  # Retry the same offset with the updated credentials
 
                 if resp.status_code == 404:
                     raise SlugNotFoundException(

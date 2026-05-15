@@ -57,15 +57,59 @@ class TestParseWorkdayUrl:
 # ── _try_workday_cxs ─────────────────────────────────────────────────────────
 
 class TestTryWorkdayCxs:
-    def _mock_post(self, status: int, body: dict | None = None):
-        resp = MagicMock()
-        resp.status_code = status
-        resp.json.return_value = body or {}
-        return resp
+    """_try_workday_cxs now uses httpx.Client (context manager), not httpx.post."""
+
+    def _make_client_class(
+        self,
+        post_responses: list[tuple[int, dict | None]],
+        post_raises: Exception | None = None,
+        get_cookies: dict | None = None,
+    ):
+        """Build a FakeClient that mimics httpx.Client used inside _try_workday_cxs.
+
+        post_responses: sequence of (status_code, body_dict) returned per POST call.
+        post_raises:    if set, client.post() raises this exception (first call).
+        get_cookies:    cookies dict returned by client.get() (CSRF fetch).
+        """
+        _responses = list(post_responses)
+        _call_idx = [0]
+        _raises = post_raises
+        _get_cookies = get_cookies or {}
+
+        class FakeClient:
+            def __init__(self, *a, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, json=None, headers=None, cookies=None, **kw):
+                if _raises is not None and _call_idx[0] == 0:
+                    _call_idx[0] += 1
+                    raise _raises
+                idx = min(_call_idx[0], len(_responses) - 1)
+                _call_idx[0] += 1
+                status, body = _responses[idx]
+                resp = MagicMock()
+                resp.status_code = status
+                resp.json.return_value = body or {}
+                return resp
+
+            def get(self, url, **kw):
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.cookies = _get_cookies
+                resp.headers = {}
+                return resp
+
+        return FakeClient
 
     def test_success_returns_dict(self):
-        resp = self._mock_post(200, {"jobPostings": [{"title": "SWE"}]})
-        with patch("scripts.validate_india_sources.httpx.post", return_value=resp):
+        FakeClient = self._make_client_class([(200, {"jobPostings": [{"title": "SWE"}]})])
+        with patch("scripts.validate_india_sources.httpx.Client", FakeClient):
             with patch("scripts.validate_india_sources.time.sleep"):
                 result = _try_workday_cxs("acme", "wd5", "External", "India")
         assert result is not None
@@ -74,24 +118,24 @@ class TestTryWorkdayCxs:
         assert "career_site_url" in result
 
     def test_non_200_returns_none(self):
-        resp = self._mock_post(404)
-        with patch("scripts.validate_india_sources.httpx.post", return_value=resp):
+        FakeClient = self._make_client_class([(404, None)])
+        with patch("scripts.validate_india_sources.httpx.Client", FakeClient):
             with patch("scripts.validate_india_sources.time.sleep"):
                 result = _try_workday_cxs("acme", "wd5", "External", "India")
         assert result is None
 
     def test_empty_postings_returns_none(self):
-        resp = self._mock_post(200, {"jobPostings": None})
-        with patch("scripts.validate_india_sources.httpx.post", return_value=resp):
+        FakeClient = self._make_client_class([(200, {"jobPostings": None})])
+        with patch("scripts.validate_india_sources.httpx.Client", FakeClient):
             with patch("scripts.validate_india_sources.time.sleep"):
                 result = _try_workday_cxs("acme", "wd5", "External", None)
         assert result is None
 
     def test_network_error_returns_none(self):
-        with patch(
-            "scripts.validate_india_sources.httpx.post",
-            side_effect=Exception("Connection refused"),
-        ):
+        FakeClient = self._make_client_class(
+            [], post_raises=Exception("Connection refused")
+        )
+        with patch("scripts.validate_india_sources.httpx.Client", FakeClient):
             with patch("scripts.validate_india_sources.time.sleep"):
                 result = _try_workday_cxs("acme", "wd5", "External", "India")
         assert result is None
@@ -99,14 +143,22 @@ class TestTryWorkdayCxs:
     def test_location_filter_included_in_body(self):
         posted_bodies: list[dict] = []
 
-        def fake_post(url, json=None, **kw):
-            posted_bodies.append(json or {})
-            resp = MagicMock()
-            resp.status_code = 200
-            resp.json.return_value = {"jobPostings": []}
-            return resp
+        class CapturingClient:
+            def __init__(self, *a, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def post(self, url, json=None, headers=None, cookies=None, **kw):
+                posted_bodies.append(json or {})
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.json.return_value = {"jobPostings": []}
+                return resp
+            def get(self, url, **kw):
+                resp = MagicMock(); resp.status_code = 200
+                resp.cookies = {}; resp.headers = {}
+                return resp
 
-        with patch("scripts.validate_india_sources.httpx.post", side_effect=fake_post):
+        with patch("scripts.validate_india_sources.httpx.Client", CapturingClient):
             with patch("scripts.validate_india_sources.time.sleep"):
                 _try_workday_cxs("acme", "wd5", "External", "India")
 
@@ -115,18 +167,111 @@ class TestTryWorkdayCxs:
     def test_no_location_filter_omits_facets(self):
         posted_bodies: list[dict] = []
 
-        def fake_post(url, json=None, **kw):
-            posted_bodies.append(json or {})
-            resp = MagicMock()
-            resp.status_code = 200
-            resp.json.return_value = {"jobPostings": []}
-            return resp
+        class CapturingClient:
+            def __init__(self, *a, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def post(self, url, json=None, headers=None, cookies=None, **kw):
+                posted_bodies.append(json or {})
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.json.return_value = {"jobPostings": []}
+                return resp
+            def get(self, url, **kw):
+                resp = MagicMock(); resp.status_code = 200
+                resp.cookies = {}; resp.headers = {}
+                return resp
 
-        with patch("scripts.validate_india_sources.httpx.post", side_effect=fake_post):
+        with patch("scripts.validate_india_sources.httpx.Client", CapturingClient):
             with patch("scripts.validate_india_sources.time.sleep"):
                 _try_workday_cxs("acme", "wd5", "External", None)
 
         assert "appliedFacets" not in posted_bodies[0]
+
+    def test_csrf_retry_on_403_succeeds(self):
+        """On 403, must fetch CSRF via GET and retry the POST.
+
+        Uses location_filter=None so Pass 1 has exactly one body (no-filter),
+        which makes it easy to reason about the call sequence:
+          POST 1 (Pass 1, no-filter):  403  → triggers CSRF fetch
+          GET:                                 returns CSRF cookie
+          POST 2 (Pass 2, no-filter):  200  → success
+        """
+        csrf_token = "test-csrf-token-abc"
+        captured_csrf_headers: list[str | None] = []
+        post_count = [0]
+
+        class CsrfClient:
+            def __init__(self, *a, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+            def post(self, url, json=None, headers=None, cookies=None, **kw):
+                post_count[0] += 1
+                captured_csrf_headers.append((headers or {}).get("X-CSRF-Token"))
+                resp = MagicMock()
+                if post_count[0] == 1:
+                    resp.status_code = 403
+                else:
+                    resp.status_code = 200
+                    resp.json.return_value = {"jobPostings": [{"title": "Eng"}]}
+                return resp
+
+            def get(self, url, **kw):
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.cookies = {"CALYPSO_CSRF_TOKEN": csrf_token}
+                resp.headers = {}
+                return resp
+
+        with patch("scripts.validate_india_sources.httpx.Client", CsrfClient):
+            with patch("scripts.validate_india_sources.time.sleep"):
+                # location_filter=None → bodies_to_try has only the no-filter body
+                result = _try_workday_cxs("acme", "wd5", "External", None)
+
+        assert result is not None
+        assert result["active"] is True
+        assert post_count[0] == 2, f"Expected 2 POSTs (pass1 + csrf-retry), got {post_count[0]}"
+        assert captured_csrf_headers[0] is None, "First POST should have no CSRF header"
+        assert captured_csrf_headers[1] == csrf_token, "Retry POST must carry X-CSRF-Token"
+
+    def test_csrf_retry_on_422_succeeds(self):
+        """On 422, must fetch CSRF via GET and retry the POST.
+
+        Same structure as test_csrf_retry_on_403_succeeds but triggers on 422.
+        """
+        csrf_token = "test-csrf-422"
+        post_count = [0]
+
+        class CsrfClient422:
+            def __init__(self, *a, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+            def post(self, url, json=None, headers=None, cookies=None, **kw):
+                post_count[0] += 1
+                resp = MagicMock()
+                if post_count[0] == 1:
+                    resp.status_code = 422
+                else:
+                    resp.status_code = 200
+                    resp.json.return_value = {"jobPostings": [{"title": "Dev"}]}
+                return resp
+
+            def get(self, url, **kw):
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.cookies = {"CALYPSO_CSRF_TOKEN": csrf_token}
+                resp.headers = {}
+                return resp
+
+        with patch("scripts.validate_india_sources.httpx.Client", CsrfClient422):
+            with patch("scripts.validate_india_sources.time.sleep"):
+                result = _try_workday_cxs("acme", "wd5", "External", None)
+
+        assert result is not None
+        assert result["active"] is True
+        assert post_count[0] == 2, f"Expected 2 POSTs, got {post_count[0]}"
 
 
 # ── _probe_workday_sync ───────────────────────────────────────────────────────

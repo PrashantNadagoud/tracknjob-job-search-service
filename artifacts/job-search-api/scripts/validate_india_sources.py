@@ -9,6 +9,13 @@ On a successful Workday probe the confirmed instance + career_site_name
 are written back into crawl_config so WorkdayCrawler can use the CXS
 API immediately without guessing.
 
+CSRF handling:
+  Some Workday instances enforce CSRF on the CXS endpoint.  The prober
+  first tries a POST without any CSRF token.  If the response is 403 or
+  422, it does a GET to the job-board HTML page to harvest the session
+  cookies and CSRF token (CALYPSO_CSRF_TOKEN or similar), then retries
+  the POST once with those credentials and an X-CSRF-Token header.
+
 Usage:
     python scripts/validate_india_sources.py             # validate all
     python scripts/validate_india_sources.py --limit 10  # first 10 only
@@ -44,13 +51,16 @@ logging.basicConfig(
 logger = logging.getLogger("validate_india")
 
 _BROWSER_UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/122.0.0.0 Safari/537.36"
+    "Chrome/120.0.0.0 Safari/537.36"
 )
 _WORKDAY_INSTANCES = ["wd1", "wd3", "wd5", "wd12"]
 _WORKDAY_SITE_NAMES = ["External", "Careers", "ExternalCareers"]
 _TIMEOUT = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=5.0)
+
+_CSRF_COOKIE_NAMES = ("CALYPSO_CSRF_TOKEN", "csrf-token", "wd-csrf-token", "CSRF-TOKEN")
+_CSRF_HEADER_NAMES = ("x-csrf-token", "X-CSRF-Token")
 
 # Parses instance + site_name out of a Workday career site URL.
 _WORKDAY_URL_RE = re.compile(
@@ -68,67 +78,175 @@ def _parse_workday_url(career_site_url: str | None) -> tuple[str, str] | None:
     return m.group(1), m.group(2)
 
 
+def _fetch_csrf_sync(
+    client: httpx.Client,
+    slug: str,
+    instance: str,
+    site_name: str,
+) -> tuple[str | None, dict]:
+    """GET the Workday job-board HTML page to harvest session cookies + CSRF token.
+
+    Returns (csrf_token_or_None, cookies_dict).  Never raises.
+    """
+    page_url = (
+        f"https://{slug}.{instance}.myworkdayjobs.com/{site_name}/jobs"
+    )
+    try:
+        resp = client.get(
+            page_url,
+            headers={
+                "User-Agent": _BROWSER_UA,
+                "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        cookies = dict(resp.cookies)
+        for name in _CSRF_COOKIE_NAMES:
+            token = cookies.get(name)
+            if token:
+                logger.info(
+                    "CSRF token found in cookie %r for %s/%s/%s",
+                    name, slug, instance, site_name,
+                )
+                return token, cookies
+        for name in _CSRF_HEADER_NAMES:
+            token = resp.headers.get(name)
+            if token:
+                logger.info(
+                    "CSRF token found in header %r for %s/%s/%s",
+                    name, slug, instance, site_name,
+                )
+                return token, cookies
+        logger.debug(
+            "No CSRF token in GET response for %s/%s/%s", slug, instance, site_name
+        )
+        return None, cookies
+    except Exception as exc:
+        logger.debug(
+            "CSRF GET failed for %s/%s/%s: %s", slug, instance, site_name, exc
+        )
+        return None, {}
+
+
 def _try_workday_cxs(
     slug: str,
     instance: str,
     site_name: str,
     location_filter: str | None,
 ) -> dict[str, Any] | None:
-    """POST one CXS probe. Returns dict on success, None on any failure.
+    """POST one CXS probe with automatic CSRF retry.
 
-    When a location_filter is supplied we try it first; if the server returns
-    422 (common when the plain-text location name is not a valid Workday facet
-    ID), we retry the same endpoint without any filter.  A 200 response that
-    contains a ``jobPostings`` key is sufficient to confirm the endpoint is
-    live — the crawler applies the location filter at crawl time using the
-    stored location_filter value.
+    Flow:
+      1. POST without CSRF token (fast path for non-CSRF-protected sites).
+      2. On 403 or 422: GET the job-board page to fetch session cookies +
+         CSRF token, then retry the POST once with those credentials.
+      3. When a location_filter is supplied, we try it first; if the server
+         returns 422 (plain-text location not a valid Workday facet ID), we
+         retry the same endpoint without any filter.  A 200 response that
+         contains a ``jobPostings`` key is sufficient to confirm the endpoint
+         is live — the crawler applies the location filter at crawl time.
+
+    Returns a result dict on success, or None on any failure.
     """
     url = (
         f"https://{slug}.{instance}.myworkdayjobs.com"
         f"/wday/cxs/{slug}/{site_name}/jobs"
     )
-    headers = {
+    referer = f"https://{slug}.{instance}.myworkdayjobs.com/{site_name}/jobs"
+
+    base_headers = {
         "User-Agent": _BROWSER_UA,
         "Accept": "application/json",
         "Content-Type": "application/json",
+        "Referer": referer,
     }
 
     bodies_to_try: list[dict[str, Any]] = []
     if location_filter:
-        bodies_to_try.append({"limit": 5, "offset": 0,
-                               "appliedFacets": {"Location": [location_filter]}})
+        bodies_to_try.append(
+            {"limit": 5, "offset": 0, "appliedFacets": {"Location": [location_filter]}}
+        )
     bodies_to_try.append({"limit": 5, "offset": 0})
 
-    for body in bodies_to_try:
-        try:
-            resp = httpx.post(url, json=body, headers=headers, timeout=_TIMEOUT)
+    with httpx.Client(timeout=_TIMEOUT, follow_redirects=True) as client:
+
+        # ── Pass 1: POST without CSRF ──────────────────────────────────────
+        last_status: int | None = None
+        for body in bodies_to_try:
+            try:
+                resp = client.post(url, json=body, headers=base_headers)
+            except Exception as exc:
+                logger.debug(
+                    "Workday CXS probe %s/%s/%s failed: %s", slug, instance, site_name, exc
+                )
+                time.sleep(1)
+                return None
+
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("jobPostings") is not None:
-                    career_url = (
-                        f"https://{slug}.{instance}.myworkdayjobs.com/{site_name}"
-                    )
-                    logger.info(
-                        "Workday %s validated: %s/%s (%d postings)",
-                        slug, instance, site_name, len(data["jobPostings"]),
-                    )
-                    time.sleep(1)
-                    return {
-                        "active": True,
-                        "career_site_url": career_url,
-                        "crawl_config": {"instance": instance, "career_site_name": site_name},
-                    }
-            elif resp.status_code in (404, 403):
-                # Wrong instance/site_name — no point retrying without filter.
-                break
-            # 422 with filter → fall through to retry without filter
-        except Exception as exc:
-            logger.debug("Workday CXS probe %s/%s/%s failed: %s", slug, instance, site_name, exc)
-            break
+                    return _success_result(slug, instance, site_name, len(data["jobPostings"]))
+            last_status = resp.status_code
+            if resp.status_code == 404:
+                time.sleep(1)
+                return None
+            # 422 with location filter → fall through to retry without filter
+            # 403 → fall through; will trigger CSRF retry below
 
-    # One sleep per slug+instance+site_name combination on all non-success paths.
+        # ── Pass 2: CSRF retry (only if last attempt was 403 or 422) ──────
+        if last_status not in (403, 422):
+            time.sleep(1)
+            return None
+
+        csrf_token, csrf_cookies = _fetch_csrf_sync(client, slug, instance, site_name)
+        csrf_headers = dict(base_headers)
+        if csrf_token:
+            csrf_headers["X-CSRF-Token"] = csrf_token
+            logger.info(
+                "Workday CSRF retry: %s/%s/%s with token", slug, instance, site_name
+            )
+        else:
+            logger.debug(
+                "Workday CSRF retry: %s/%s/%s without token (hoping cookies help)",
+                slug, instance, site_name,
+            )
+
+        for body in bodies_to_try:
+            try:
+                resp = client.post(
+                    url, json=body, headers=csrf_headers, cookies=csrf_cookies
+                )
+            except Exception as exc:
+                logger.debug(
+                    "Workday CSRF retry %s/%s/%s failed: %s", slug, instance, site_name, exc
+                )
+                break
+
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("jobPostings") is not None:
+                    return _success_result(slug, instance, site_name, len(data["jobPostings"]))
+            if resp.status_code == 404:
+                break
+            # 422/403 still → next body
+
     time.sleep(1)
     return None
+
+
+def _success_result(
+    slug: str, instance: str, site_name: str, n_jobs: int
+) -> dict[str, Any]:
+    career_url = f"https://{slug}.{instance}.myworkdayjobs.com/{site_name}"
+    logger.info(
+        "Workday %s validated: %s/%s (%d postings)", slug, instance, site_name, n_jobs
+    )
+    time.sleep(1)
+    return {
+        "active": True,
+        "career_site_url": career_url,
+        "crawl_config": {"instance": instance, "career_site_name": site_name},
+    }
 
 
 def _probe_workday_sync(

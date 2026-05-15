@@ -459,3 +459,172 @@ class TestWorkdaySitemapRegression:
             )
 
         assert jobs == []
+
+
+# ── WorkdayCrawler CSRF retry ─────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+class TestWorkdayCsrfRetry:
+    """_crawl_cxs must retry with CSRF token when the first POST returns 403/422."""
+
+    async def _run_cxs_with_csrf(
+        self,
+        first_status: int,
+        csrf_token: str,
+        jobs_response: dict,
+    ) -> list[dict[str, Any]]:
+        """Simulate: first POST → first_status, GET → csrf_token cookie, second POST → 200."""
+        crawler = WorkdayCrawler()
+        source_id = uuid.uuid4()
+        post_calls: list[dict] = []
+        get_calls: list[str] = []
+
+        class FakeResponse:
+            def __init__(self, status: int, data: dict | None = None, cookies: dict | None = None, headers: dict | None = None):
+                self.status_code = status
+                self._data = data or {}
+                self.cookies = cookies or {}
+                self.headers = headers or {}
+
+            def json(self):
+                return self._data
+
+        class FakeClient:
+            def __init__(self, *a, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                pass
+
+            async def post(self, url, json=None, headers=None, cookies=None, **kw):
+                post_calls.append({"json": json, "headers": headers or {}, "cookies": cookies or {}})
+                if len(post_calls) == 1:
+                    return FakeResponse(first_status)
+                return FakeResponse(200, jobs_response)
+
+            async def get(self, url, **kw):
+                get_calls.append(url)
+                return FakeResponse(200, cookies={"CALYPSO_CSRF_TOKEN": csrf_token})
+
+        with patch("httpx.AsyncClient", FakeClient):
+            return await crawler._crawl_cxs(
+                "acme",
+                source_id,
+                {"instance": "wd5", "career_site_name": "External"},
+                "India",
+            ), post_calls, get_calls
+
+    async def test_csrf_retry_on_403_fetches_token_and_succeeds(self):
+        posting = _make_posting("SWE", "/en-US/External/job/Bangalore/SWE_123")
+        jobs, post_calls, get_calls = await self._run_cxs_with_csrf(
+            first_status=403,
+            csrf_token="test-csrf-abc",
+            jobs_response=_cxs_response([posting]),
+        )
+        assert len(jobs) == 1
+        assert jobs[0]["title"] == "SWE"
+        assert len(get_calls) == 1, "Should have made one GET for CSRF"
+        assert len(post_calls) == 2, "Should have retried the POST"
+        assert post_calls[1]["headers"].get("X-CSRF-Token") == "test-csrf-abc"
+
+    async def test_csrf_retry_on_422_fetches_token_and_succeeds(self):
+        posting = _make_posting("PM", "/en-US/External/job/Mumbai/PM_456")
+        jobs, post_calls, get_calls = await self._run_cxs_with_csrf(
+            first_status=422,
+            csrf_token="test-csrf-xyz",
+            jobs_response=_cxs_response([posting]),
+        )
+        assert len(jobs) == 1
+        assert jobs[0]["title"] == "PM"
+        assert len(get_calls) == 1, "Should have made one GET for CSRF"
+        assert post_calls[1]["headers"].get("X-CSRF-Token") == "test-csrf-xyz"
+
+    async def test_csrf_only_retried_once(self):
+        """If POST still fails after CSRF retry, raise CrawlException (no infinite loop)."""
+        crawler = WorkdayCrawler()
+        source_id = uuid.uuid4()
+        post_count = 0
+
+        class FakeClient:
+            def __init__(self, *a, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            async def post(self, url, **kw):
+                nonlocal post_count
+                post_count += 1
+                resp = MagicMock()
+                resp.status_code = 403
+                return resp
+            async def get(self, url, **kw):
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.cookies = {"CALYPSO_CSRF_TOKEN": "some-token"}
+                resp.headers = {}
+                return resp
+
+        with patch("httpx.AsyncClient", FakeClient):
+            with pytest.raises(Exception):
+                await crawler._crawl_cxs(
+                    "acme", source_id, {"instance": "wd5", "career_site_name": "Ext"}, "India"
+                )
+        assert post_count == 2, f"Expected exactly 2 POST calls (initial + CSRF retry), got {post_count}"
+
+    async def test_no_csrf_fetch_on_200(self):
+        """Successful first POST must not trigger the CSRF GET."""
+        crawler = WorkdayCrawler()
+        source_id = uuid.uuid4()
+        get_called = []
+
+        class FakeClient:
+            def __init__(self, *a, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            async def post(self, url, **kw):
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.json.return_value = {"jobPostings": []}
+                return resp
+            async def get(self, url, **kw):
+                get_called.append(url)
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.cookies = {}
+                resp.headers = {}
+                return resp
+
+        with patch("httpx.AsyncClient", FakeClient):
+            await crawler._crawl_cxs(
+                "acme", source_id, {"instance": "wd5", "career_site_name": "Ext"}, "India"
+            )
+
+        assert get_called == [], "GET should NOT be called when POST succeeds immediately"
+
+    async def test_referer_header_set_on_post(self):
+        """Referer must point to the job-board HTML page."""
+        crawler = WorkdayCrawler()
+        source_id = uuid.uuid4()
+        captured_headers: list[dict] = []
+
+        class FakeClient:
+            def __init__(self, *a, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            async def post(self, url, headers=None, **kw):
+                captured_headers.append(headers or {})
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.json.return_value = {"jobPostings": []}
+                return resp
+
+        with patch("httpx.AsyncClient", FakeClient):
+            await crawler._crawl_cxs(
+                "acme", source_id, {"instance": "wd5", "career_site_name": "External"}, "India"
+            )
+
+        assert captured_headers, "POST was never called"
+        referer = captured_headers[0].get("Referer", "")
+        assert "acme.wd5.myworkdayjobs.com" in referer
+        assert "External/jobs" in referer
