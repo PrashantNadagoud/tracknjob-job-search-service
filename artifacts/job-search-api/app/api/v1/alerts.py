@@ -89,7 +89,7 @@ def _row_to_dict(row) -> dict[str, Any]:
 async def _get_subscription_row(user_id: str, db: AsyncSession) -> Any:
     row = (
         await db.execute(
-            text("SELECT * FROM jobs.alert_subscriptions WHERE user_id = :uid"),
+            text("SELECT * FROM jobs.alert_subscriptions WHERE user_id = :uid AND is_active = true"),
             {"uid": user_id},
         )
     ).fetchone()
