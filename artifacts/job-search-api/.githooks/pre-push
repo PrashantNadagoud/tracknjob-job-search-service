@@ -1,0 +1,13 @@
+#!/bin/sh
+# Block direct pushes to master or staging — use PRs instead
+
+protected="master staging main"
+current_branch=$(git symbolic-ref HEAD 2>/dev/null | sed 's|refs/heads/||')
+
+for branch in $protected; do
+  if [ "$current_branch" = "$branch" ]; then
+    echo "❌ Direct push to '$branch' is blocked."
+    echo "   Create a feature branch and open a PR instead."
+    exit 1
+  fi
+done
