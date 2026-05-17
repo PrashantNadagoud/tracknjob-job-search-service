@@ -1,7 +1,7 @@
 #!/bin/sh
 # Block direct pushes to master or staging — use PRs instead
 
-protected="master staging main"
+protected="main staging"
 current_branch=$(git symbolic-ref HEAD 2>/dev/null | sed 's|refs/heads/||')
 
 for branch in $protected; do
