@@ -6,6 +6,19 @@ Strategy (chosen per source):
 - If location_filter is null         → sitemap.xml approach (existing behaviour)
   (more reliable for sources where CSRF tokens are not needed)
 
+# TODO: Enterprise Workday CSRF Fix
+# Companies: IBM, Microsoft, Accenture, Deloitte, EY,
+#             Cognizant, KPMG, SAP, Oracle, Capgemini (India sources)
+# Issue: These tenants return HTTP 500 on the CSRF GET endpoint
+#         (/wday/cxs/{slug}/{site}/jobs returns 422; GET /{site}/jobs returns 500)
+#         so session cookies + CSRF token cannot be harvested server-side.
+# Fix: Requires Playwright headless browser to establish a real browser session,
+#      extract session cookies, and replay them in the CXS POST request.
+# Priority: Post-Railway-deploy enhancement
+# DB status: last_crawl_status = 'requires_browser_crawl' for these sources
+# Workaround: These companies post India jobs on LinkedIn and their US Workday
+#             slugs work fine for US jobs via the sitemap approach.
+
 CSRF handling:
   Some Workday instances enforce CSRF protection on the CXS endpoint.
   When a 403 or 422 is returned on the first POST, the crawler does a
@@ -148,16 +161,26 @@ class WorkdayCrawler(BaseATSCrawler):
         extra_cookies: dict = {}
         csrf_fetched = False
 
+        use_search_text = config.get("search_text_mode", False)
+        _SEARCH_TEXT_MAX_JOBS = 500  # cap for searchText mode (not a precise location filter)
+
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0),
             follow_redirects=True,
         ) as client:
             while True:
-                body: dict[str, Any] = {
-                    "appliedFacets": {"Location": [location_filter]},
-                    "limit": limit,
-                    "offset": offset,
-                }
+                if use_search_text:
+                    body: dict[str, Any] = {
+                        "searchText": location_filter,
+                        "limit": limit,
+                        "offset": offset,
+                    }
+                else:
+                    body = {
+                        "appliedFacets": {"Location": [location_filter]},
+                        "limit": limit,
+                        "offset": offset,
+                    }
                 try:
                     resp = await client.post(
                         api_url,
@@ -169,6 +192,15 @@ class WorkdayCrawler(BaseATSCrawler):
                     raise CrawlException(f"CXS request failed for {ats_slug}: {exc}")
 
                 # ── CSRF retry (once only) ─────────────────────────────────
+                if resp.status_code == 400 and not use_search_text:
+                    logger.info(
+                        "workday CXS: Location facet rejected (400) for %s — switching to searchText mode",
+                        ats_slug,
+                    )
+                    use_search_text = True
+                    offset = 0
+                    continue
+
                 if resp.status_code in (403, 422) and not csrf_fetched:
                     csrf_fetched = True
                     csrf_token, extra_cookies = await _fetch_csrf_token(
@@ -241,6 +273,12 @@ class WorkdayCrawler(BaseATSCrawler):
                 if len(postings) < limit:
                     break
                 offset += limit
+                if use_search_text and len(jobs) >= _SEARCH_TEXT_MAX_JOBS:
+                    logger.info(
+                        "workday CXS: searchText mode hit %d-job cap for %s — stopping pagination",
+                        _SEARCH_TEXT_MAX_JOBS, ats_slug,
+                    )
+                    break
 
         logger.info(
             "workday CXS: slug=%s location=%r crawled %d jobs",
