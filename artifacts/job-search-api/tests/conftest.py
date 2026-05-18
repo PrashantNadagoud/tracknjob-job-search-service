@@ -20,7 +20,7 @@ _defaults = {
     "TNJ_SECRET_KEY": TEST_SECRET,
     "TNJ_FRONTEND_URL": "http://localhost:3000",
     "ADMIN_USER_ID": TEST_ADMIN_ID,
-    "RESEND_API_KEY": "test_key",
+    "BREVO_API_KEY": "test_key",
     "OPENAI_API_KEY": "test_key",
 }
 for k, v in _defaults.items():

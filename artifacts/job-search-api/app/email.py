@@ -1,8 +1,16 @@
 import os
 
-import resend
+import brevo_python
+from brevo_python.api import transactional_emails_api
+from brevo_python.models import SendSmtpEmail, SendSmtpEmailSender, SendSmtpEmailTo
 
-resend.api_key = os.getenv("RESEND_API_KEY")
+
+def _get_brevo_client() -> transactional_emails_api.TransactionalEmailsApi:
+    configuration = brevo_python.Configuration()
+    configuration.api_key["api-key"] = os.getenv("BREVO_API_KEY", "")
+    return transactional_emails_api.TransactionalEmailsApi(
+        brevo_python.ApiClient(configuration)
+    )
 
 
 def send_job_alert_email(
@@ -50,12 +58,16 @@ def send_job_alert_email(
       </div>
     </div>"""
 
-    resend.Emails.send({
-        "from": f"alerts@{os.getenv('RESEND_FROM_DOMAIN', 'tracknjob.com')}",
-        "to": to_email,
-        "subject": (
+    client = _get_brevo_client()
+    from_email = os.getenv("BREVO_FROM_EMAIL", "alerts@tracknjob.com")
+    from_name = os.getenv("BREVO_FROM_NAME", "TrackNJob Alerts")
+    send_smtp_email = SendSmtpEmail(
+        to=[SendSmtpEmailTo(email=to_email)],
+        sender=SendSmtpEmailSender(email=from_email, name=from_name),
+        subject=(
             f"\U0001f514 {len(new_jobs)} new job{'s' if len(new_jobs) > 1 else ''} "
             f"matching '{search_name}'"
         ),
-        "html": html,
-    })
+        html_content=html,
+    )
+    client.send_transac_email(send_smtp_email)

@@ -13,8 +13,9 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     ADMIN_USER_ID: str = ""
     CRUNCHBASE_API_KEY: str = ""
-    RESEND_API_KEY: str = ""
-    RESEND_FROM_EMAIL: str = "alerts@tracknjob.com"
+    BREVO_API_KEY: str = ""
+    BREVO_FROM_EMAIL: str = "alerts@tracknjob.com"
+    BREVO_FROM_NAME: str = "TrackNJob Alerts"
     ALERTS_ENABLED: bool = True
 
     # Crawler seed configuration (comma-separated lists)

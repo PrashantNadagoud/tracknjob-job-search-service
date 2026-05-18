@@ -439,5 +439,5 @@ class AlertDelivery(Base):
     )
     jobs_sent: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(sa.String(50), nullable=False)
-    resend_message_id: Mapped[str | None] = mapped_column(sa.String, nullable=True)
+    email_message_id: Mapped[str | None] = mapped_column(sa.String, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

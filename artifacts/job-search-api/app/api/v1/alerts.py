@@ -117,14 +117,14 @@ async def _send_alert_for_subscription(sub_row, db: AsyncSession) -> dict[str, A
     await db.execute(
         text("""
             INSERT INTO jobs.alert_deliveries
-                (subscription_id, jobs_sent, status, resend_message_id, error_message)
+                (subscription_id, jobs_sent, status, email_message_id, error_message)
             VALUES (:sid, :cnt, :status, :mid, :err)
         """),
         {
             "sid": sub_row.id,
             "cnt": len(jobs),
             "status": result["status"],
-            "mid": result.get("resend_message_id"),
+            "mid": result.get("email_message_id"),
             "err": result.get("error_message"),
         },
     )

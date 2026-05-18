@@ -105,7 +105,7 @@ async def _query_matching_jobs(sub, db: AsyncSession) -> list[dict[str, Any]]:
 
 
 async def _render_and_send(sub, jobs: list[dict[str, Any]]) -> dict[str, Any]:
-    """Render the Jinja2 template and send via Resend. Returns status dict."""
+    """Render the Jinja2 template and send via Brevo. Returns status dict."""
     from jinja2 import Environment, FileSystemLoader, select_autoescape
 
     env = Environment(
@@ -154,19 +154,28 @@ async def _render_and_send(sub, jobs: list[dict[str, Any]]) -> dict[str, Any]:
     )
 
     subject = f"☀️ {len(jobs)} new job{'s' if len(jobs) != 1 else ''} for you today, {sub.name or 'there'}"
-    from_email = os.environ.get("RESEND_FROM_EMAIL", "alerts@tracknjob.com")
 
     try:
-        import resend as resend_lib
-        resend_lib.api_key = os.environ.get("RESEND_API_KEY", "")
-        response = resend_lib.Emails.send({
-            "from": f"TrackNJob Alerts <{from_email}>",
-            "to": sub.email,
-            "subject": subject,
-            "html": html_body,
-        })
-        msg_id = response.get("id") if isinstance(response, dict) else str(response)
-        return {"status": "sent", "resend_message_id": msg_id}
+        import brevo_python
+        from brevo_python.api import transactional_emails_api
+        from brevo_python.models import SendSmtpEmail, SendSmtpEmailSender, SendSmtpEmailTo
+
+        configuration = brevo_python.Configuration()
+        configuration.api_key["api-key"] = os.environ.get("BREVO_API_KEY", "")
+        client = transactional_emails_api.TransactionalEmailsApi(
+            brevo_python.ApiClient(configuration)
+        )
+        from_email = os.environ.get("BREVO_FROM_EMAIL", "alerts@tracknjob.com")
+        from_name = os.environ.get("BREVO_FROM_NAME", "TrackNJob Alerts")
+        send_smtp_email = SendSmtpEmail(
+            to=[SendSmtpEmailTo(email=sub.email, name=sub.name or "")],
+            sender=SendSmtpEmailSender(email=from_email, name=from_name),
+            subject=subject,
+            html_content=html_body,
+        )
+        response = client.send_transac_email(send_smtp_email)
+        msg_id = response.message_id if hasattr(response, "message_id") else str(response)
+        return {"status": "sent", "email_message_id": msg_id}
     except Exception as exc:
         logger.error("Failed to send alert email to %s: %s", sub.email, exc)
         return {"status": "failed", "error_message": str(exc)}
@@ -293,7 +302,7 @@ async def _async_retry_failed_deliveries() -> dict[str, int]:
                         UPDATE jobs.alert_deliveries
                         SET jobs_sent          = :cnt,
                             status             = :status,
-                            resend_message_id  = :mid,
+                            email_message_id   = :mid,
                             error_message      = :err
                         WHERE id = :delivery_id
                     """),
@@ -301,7 +310,7 @@ async def _async_retry_failed_deliveries() -> dict[str, int]:
                         "delivery_id": delivery_id,
                         "cnt": len(jobs),
                         "status": result["status"],
-                        "mid": result.get("resend_message_id"),
+                        "mid": result.get("email_message_id"),
                         "err": result.get("error_message"),
                     },
                 )
@@ -463,7 +472,7 @@ async def _async_send_daily_alerts() -> dict[str, int]:
                         UPDATE jobs.alert_deliveries
                         SET jobs_sent          = :cnt,
                             status             = :status,
-                            resend_message_id  = :mid,
+                            email_message_id   = :mid,
                             error_message      = :err
                         WHERE id = :delivery_id
                     """),
@@ -471,7 +480,7 @@ async def _async_send_daily_alerts() -> dict[str, int]:
                         "delivery_id": delivery_id,
                         "cnt": len(jobs),
                         "status": result["status"],
-                        "mid": result.get("resend_message_id"),
+                        "mid": result.get("email_message_id"),
                         "err": result.get("error_message"),
                     },
                 )

@@ -339,7 +339,7 @@ class TestTestSend:
         )
 
         with patch("app.alert_tasks._render_and_send", new_callable=AsyncMock) as mock_send:
-            mock_send.return_value = {"status": "sent", "resend_message_id": "msg-abc"}
+            mock_send.return_value = {"status": "sent", "email_message_id": "msg-abc"}
             r = await async_client.post(
                 f"{BASE}/test-send/{ALERT_USER_1}", headers=_auth(ALERT_USER_1)
             )
@@ -478,7 +478,7 @@ class TestAlertTaskLogic:
             mock_jobs.return_value = [{"id": "1", "title": "Eng", "company": "Co",
                                         "location": "Remote", "employment_type": None,
                                         "source_url": "http://x.com"}]
-            mock_send.return_value = {"status": "sent", "resend_message_id": "msg-1"}
+            mock_send.return_value = {"status": "sent", "email_message_id": "msg-1"}
 
             sub = MagicMock()
             sub.id = "sub-uuid-1"
@@ -700,7 +700,7 @@ class TestRetryFailedDeliveries:
              patch("app.alert_tasks._query_matching_jobs", new_callable=AsyncMock) as mock_qj, \
              patch("app.alert_tasks._render_and_send", new_callable=AsyncMock) as mock_send:
             mock_qj.return_value = mock_jobs
-            mock_send.return_value = {"status": "sent", "resend_message_id": "msg-retry-1"}
+            mock_send.return_value = {"status": "sent", "email_message_id": "msg-retry-1"}
             result = await _async_retry_failed_deliveries()
 
         assert result["processed"] == 1
