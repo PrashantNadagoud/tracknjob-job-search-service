@@ -86,12 +86,12 @@ def _row_to_dict(row) -> dict[str, Any]:
     }
 
 
-async def _get_subscription_row(user_id: str, db: AsyncSession) -> Any:
+async def _get_subscription_row(user_id: str, db: AsyncSession, active_only: bool = True) -> Any:
+    query = "SELECT * FROM jobs.alert_subscriptions WHERE user_id = :uid"
+    if active_only:
+        query += " AND is_active = true"
     row = (
-        await db.execute(
-            text("SELECT * FROM jobs.alert_subscriptions WHERE user_id = :uid AND is_active = true"),
-            {"uid": user_id},
-        )
+        await db.execute(text(query), {"uid": user_id})
     ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Subscription not found")
@@ -198,7 +198,7 @@ async def get_subscription(
 ) -> dict:
     """Return the full subscription object for a user (own record only)."""
     _require_own_record(current_user, user_id)
-    row = await _get_subscription_row(user_id, db)
+    row = await _get_subscription_row(user_id, db, active_only=False)
     return _row_to_dict(row)
 
 
