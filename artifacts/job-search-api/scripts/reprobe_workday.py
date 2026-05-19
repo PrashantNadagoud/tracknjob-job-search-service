@@ -29,7 +29,7 @@ logger = logging.getLogger("reprobe_workday")
 async def main(dry_run: bool = False, limit: int | None = None):
     from app.db import AsyncSessionFactory
     from app.models import AtsSource
-    from sqlalchemy import select, update
+    from sqlalchemy import select
     from app.discovery.ats_prober import ATSProber
     import httpx
     
