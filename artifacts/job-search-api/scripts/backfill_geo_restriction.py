@@ -13,7 +13,6 @@ import os
 import sys
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
-from typing import Any
 
 # Allow running from the repo root without installing the package
 sys.path.insert(0, str(Path(__file__).parent.parent))

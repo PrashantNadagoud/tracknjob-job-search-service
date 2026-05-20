@@ -1,6 +1,5 @@
 """Tests for app.utils.title_normalizer — normalize_title + extract_seniority."""
 
-import pytest
 
 from app.utils.title_normalizer import extract_seniority, normalize_title
 
