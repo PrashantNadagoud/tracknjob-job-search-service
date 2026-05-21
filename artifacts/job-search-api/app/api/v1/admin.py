@@ -13,13 +13,22 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
+from app.auth import get_current_user
+from app.config import get_settings
+from fastapi import HTTPException
 
 router = APIRouter()
 
 
 @router.get("/seed-status", response_model=None)
-async def seed_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+async def seed_status(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
     """Return aggregate stats for the seed pipeline and crawl infrastructure."""
+    settings = get_settings()
+    if not settings.ADMIN_USER_ID or current_user["sub"] != settings.ADMIN_USER_ID:
+        raise HTTPException(status_code=403, detail="Admin access required")
 
     queue_rows = (
         await db.execute(
@@ -31,7 +40,7 @@ async def seed_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
             """)
         )
     ).fetchall()
-    
+
     source_rows = (
         await db.execute(
             text("""
@@ -43,13 +52,13 @@ async def seed_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
             """)
         )
     ).fetchall()
-    
+
     by_source = {}
     for row in source_rows:
         if row.source not in by_source:
             by_source[row.source] = {}
         by_source[row.source][row.status] = int(row.cnt)
-        
+
     discovery_queue: dict[str, Any] = {
         "total": sum(int(row.cnt) for row in queue_rows),
         "by_status": {row.status: int(row.cnt) for row in queue_rows},
@@ -57,9 +66,7 @@ async def seed_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     }
 
     ats_total_row = (
-        await db.execute(
-            text("SELECT COUNT(*) FROM jobs.ats_sources")
-        )
+        await db.execute(text("SELECT COUNT(*) FROM jobs.ats_sources"))
     ).scalar()
 
     ats_active_row = (
@@ -93,9 +100,7 @@ async def seed_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     }
 
     last_crawl_row = (
-        await db.execute(
-            text("SELECT MAX(last_seen_at) FROM jobs.listings")
-        )
+        await db.execute(text("SELECT MAX(last_seen_at) FROM jobs.listings"))
     ).scalar()
 
     total_active_row = (
