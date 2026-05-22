@@ -8,7 +8,8 @@ trying to share a session.
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+import pytest
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crawler.tasks import _upsert_jobs, _async_deactivate_stale

@@ -1,0 +1,10 @@
+--- artifacts/job-search-api/tests/test_discovery.py
++++ artifacts/job-search-api/tests/test_discovery.py
+@@ -10,6 +10,7 @@
+ import json
+ import logging
+ import uuid
++from datetime import datetime, timezone
+ from unittest.mock import AsyncMock, MagicMock, patch
+
+ import pytest

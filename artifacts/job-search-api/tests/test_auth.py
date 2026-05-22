@@ -1,5 +1,6 @@
 """Part 2 — Authentication tests."""
 
+import pytest
 from tests.conftest import make_token, TEST_USER_ID
 
 

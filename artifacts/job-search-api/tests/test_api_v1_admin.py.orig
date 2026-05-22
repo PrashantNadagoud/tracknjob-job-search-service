@@ -24,7 +24,7 @@ class TestAdmin:
             def fetchall(self): return []
 
         def execute_side_effect(stmt, *args, **kwargs):
-            if "last_seen_at" in str(stmt):
+            if "MAX" in str(stmt):
                 return MockResultDate()
             return MockResultQueue()
 

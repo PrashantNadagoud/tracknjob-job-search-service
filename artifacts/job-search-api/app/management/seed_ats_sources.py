@@ -16,8 +16,9 @@ idempotent: running the script multiple times is safe.
 import asyncio
 import logging
 import re
+import sys
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import get_settings
@@ -68,6 +69,7 @@ async def _seed(session: AsyncSession, company_slug: str, company_name: str, ats
 async def _run() -> None:
     settings = get_settings()
 
+    from urllib.parse import urlparse
     raw_url = settings.DATABASE_URL
     if raw_url.startswith("postgresql://"):
         raw_url = raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)

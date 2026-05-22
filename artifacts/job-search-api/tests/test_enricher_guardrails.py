@@ -22,6 +22,7 @@ G3 — Additive-only writes (Guardrail 3)
 """
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -203,7 +204,7 @@ def test_g3a_existing_non_null_field_not_overwritten():
     record = _fresh_record(founded_year=2009)
     enricher._apply_validated(record, {"founded_year": 2015})
     assert record.founded_year == 2009, (
-        "G3 violation: existing founded_year 2009 overwritten with 2015"
+        f"G3 violation: existing founded_year 2009 overwritten with 2015"
     )
 
     record = _fresh_record(num_employees_range="201-500")

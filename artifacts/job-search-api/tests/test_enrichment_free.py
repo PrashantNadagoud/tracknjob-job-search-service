@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import text
 
 from app.enrichment.enricher import CompanyEnricher
 from app.enrichment.linkedin import enrich_from_linkedin

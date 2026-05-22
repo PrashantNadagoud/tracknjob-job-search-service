@@ -26,6 +26,7 @@ from app.crawler.geo_classifier import (
     parse_greenhouse_location,
 )
 from app.models import Listing
+from tests.conftest import TEST_USER_ID
 
 
 # ---------------------------------------------------------------------------

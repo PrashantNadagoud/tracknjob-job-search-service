@@ -713,6 +713,7 @@ class TestLeverCrawler:
     @pytest.mark.asyncio
     async def test_pagination_stops_when_page_is_underfull(self):
         """When a page returns fewer items than PAGE_SIZE, no second request is made."""
+        from app.crawler.ats.lever import _PAGE_SIZE
 
         crawler = LeverCrawler()
         call_count = 0

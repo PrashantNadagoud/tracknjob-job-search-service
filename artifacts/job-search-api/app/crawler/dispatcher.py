@@ -30,7 +30,7 @@ from app.crawler.ats.rippling import RipplingCrawler
 from app.crawler.ats.smartrecruiters import SmartRecruitersCrawler
 from app.crawler.ats.workday import WorkdayCrawler
 from app.crawler.ats_base import BaseATSCrawler
-from app.crawler.exceptions import RateLimitedException, SlugNotFoundException
+from app.crawler.exceptions import CrawlerError, RateLimitedException, SlugNotFoundException
 from app.models import AtsSource, Company, CrawlDeadLetter
 
 logger = logging.getLogger(__name__)

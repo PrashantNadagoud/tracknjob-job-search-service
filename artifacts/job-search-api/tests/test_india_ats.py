@@ -237,6 +237,7 @@ class TestWorkdayCxsCrawler:
         crawler = WorkdayCrawler()
         source_id = uuid.uuid4()
 
+        import httpx
 
         call_count = 0
 

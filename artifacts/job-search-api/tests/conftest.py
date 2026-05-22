@@ -48,7 +48,7 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
 )
 
 from app.main import app  # noqa: E402
-from app.models import JobPreference, Listing  # noqa: E402
+from app.models import Company, HiddenJob, JobPreference, Listing, SavedSearch  # noqa: E402
 
 
 # ── Test engine (NullPool so each call gets a fresh connection) ───────────────

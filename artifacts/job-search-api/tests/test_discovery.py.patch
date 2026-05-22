@@ -1,0 +1,10 @@
+--- artifacts/job-search-api/tests/test_discovery.py
++++ artifacts/job-search-api/tests/test_discovery.py
+@@ -14,6 +14,7 @@
+ import asyncio
+ import json
+ from typing import Any
++from datetime import datetime, timezone
+ from unittest.mock import AsyncMock, MagicMock, patch
+
+ import pytest

@@ -7,6 +7,8 @@ only the seeded rows, preventing interference from real production data.
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import HiddenJob, Listing
