@@ -12,13 +12,10 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
-import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from httpx import AsyncClient, ASGITransport
 
 from app.discovery.ats_prober import ATSProber, _derive_slug, ATS_PROBE_PATTERNS
 from app.discovery.yc_scraper import YCScraper
@@ -349,7 +346,6 @@ def test_run_yc_seed_task_has_correct_config():
 
 def test_ats_probe_patterns_cover_all_10_types():
     """Ensure the pattern dict covers the known ATS platforms."""
-    from app.discovery.ats_prober import ATS_PROBE_PATTERNS
 
     known_types = {
         "greenhouse",

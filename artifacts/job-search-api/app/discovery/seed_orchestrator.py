@@ -24,7 +24,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.discovery.ats_prober import ATSProber
-from app.discovery.yc_scraper import YCScraper
 
 logger = logging.getLogger(__name__)
 
