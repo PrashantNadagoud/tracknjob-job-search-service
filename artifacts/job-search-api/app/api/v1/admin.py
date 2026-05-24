@@ -1,4 +1,4 @@
-"""Admin API — internal-use endpoints, no authentication required.
+"""Admin API — internal-use endpoints, authentication required.
 
 Endpoints:
     GET /seed-status   — aggregate counts for discovery queue, ATS sources, listings.
@@ -12,9 +12,10 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import admin_required
 from app.db import get_db
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(admin_required)])
 
 
 @router.get("/seed-status", response_model=None)
@@ -31,7 +32,7 @@ async def seed_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
             """)
         )
     ).fetchall()
-    
+
     source_rows = (
         await db.execute(
             text("""
@@ -43,13 +44,13 @@ async def seed_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
             """)
         )
     ).fetchall()
-    
+
     by_source = {}
     for row in source_rows:
         if row.source not in by_source:
             by_source[row.source] = {}
         by_source[row.source][row.status] = int(row.cnt)
-        
+
     discovery_queue: dict[str, Any] = {
         "total": sum(int(row.cnt) for row in queue_rows),
         "by_status": {row.status: int(row.cnt) for row in queue_rows},
@@ -57,9 +58,7 @@ async def seed_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     }
 
     ats_total_row = (
-        await db.execute(
-            text("SELECT COUNT(*) FROM jobs.ats_sources")
-        )
+        await db.execute(text("SELECT COUNT(*) FROM jobs.ats_sources"))
     ).scalar()
 
     ats_active_row = (
@@ -93,9 +92,7 @@ async def seed_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     }
 
     last_crawl_row = (
-        await db.execute(
-            text("SELECT MAX(last_seen_at) FROM jobs.listings")
-        )
+        await db.execute(text("SELECT MAX(last_seen_at) FROM jobs.listings"))
     ).scalar()
 
     total_active_row = (
