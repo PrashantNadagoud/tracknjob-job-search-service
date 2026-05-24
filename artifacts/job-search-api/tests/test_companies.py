@@ -366,9 +366,7 @@ class TestEnrichmentPipeline:
         with (
             patch("app.enrichment.enricher.enrich_from_wikipedia", AsyncMock(return_value=wiki_result)),
             patch("app.enrichment.enricher.enrich_from_linkedin", fail),
-            patch("app.enrichment.enricher.enrich_from_comparably", fail),
             patch("app.enrichment.enricher.enrich_from_builtin", fail),
-            patch("app.enrichment.enricher.enrich_salary_from_glassdoor", fail),
             patch("app.enrichment.enricher.asyncio.sleep", new_callable=AsyncMock),
         ):
             record = await enricher.enrich("test-acme", "Acme", "Engineer", "US")
@@ -408,10 +406,16 @@ class TestEnrichmentPipeline:
                 enriched_at=datetime.now(timezone.utc),
             )
 
-        with patch.object(
-            __import__("app.enrichment.enricher", fromlist=["CompanyEnricher"]).CompanyEnricher,
-            "enrich",
-            mock_enrich,
+        from app.config import get_settings
+        mock_settings = MagicMock(wraps=get_settings())
+        mock_settings.ENRICHMENT_ENABLED = True
+        with (
+            patch("app.enrichment.tasks.get_settings", return_value=mock_settings),
+            patch.object(
+                __import__("app.enrichment.enricher", fromlist=["CompanyEnricher"]).CompanyEnricher,
+                "enrich",
+                mock_enrich,
+            ),
         ):
             await _async_enrich_new_companies()
 
@@ -459,10 +463,16 @@ class TestEnrichmentPipeline:
                 enriched_at=datetime.now(timezone.utc),
             )
 
-        with patch.object(
-            __import__("app.enrichment.enricher", fromlist=["CompanyEnricher"]).CompanyEnricher,
-            "enrich",
-            mock_enrich,
+        from app.config import get_settings
+        mock_settings = MagicMock(wraps=get_settings())
+        mock_settings.ENRICHMENT_ENABLED = True
+        with (
+            patch("app.enrichment.tasks.get_settings", return_value=mock_settings),
+            patch.object(
+                __import__("app.enrichment.enricher", fromlist=["CompanyEnricher"]).CompanyEnricher,
+                "enrich",
+                mock_enrich,
+            ),
         ):
             await _async_reenrich_stale_companies()
 
