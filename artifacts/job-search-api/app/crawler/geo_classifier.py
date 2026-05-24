@@ -89,6 +89,11 @@ def classify_listing(
     if work_type in ("remote", "fully_remote"):
         return "GLOBAL"
 
+    # If there is a real location string but it matched no known geo signal,
+    # treat the job as region-specific but not US — keeps it out of the US feed.
+    if location_raw and location_raw.strip():
+        return "OTHER"
+
     return "US"
 
 
