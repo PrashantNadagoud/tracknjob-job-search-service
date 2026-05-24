@@ -1,5 +1,6 @@
 import logging
 import re
+import asyncio
 import httpx
 from bs4 import BeautifulSoup
 from typing import List, Dict, Optional, Any

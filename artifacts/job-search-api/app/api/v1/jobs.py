@@ -109,20 +109,12 @@ def _build_company_summary(
 
 @router.get("/search", response_model=JobSearchResponse, summary="Search job listings")
 async def search_jobs(
-    q: str | None = Query(
-        default=None, description="Full-text search: title, company, location"
-    ),
-    location: str | None = Query(
-        default=None, description="Filter by location (partial match)"
-    ),
+    q: str | None = Query(default=None, description="Full-text search: title, company, location"),
+    location: str | None = Query(default=None, description="Filter by location (partial match)"),
     remote: bool = Query(default=False, description="Return remote-only jobs"),
     source: str | None = Query(default=None, description="Filter by source_label"),
-    company: str | None = Query(
-        default=None, description="Filter by company name (partial match)"
-    ),
-    posted: PostedFilter = Query(
-        default=PostedFilter.any, description="Filter by posted_at recency"
-    ),
+    company: str | None = Query(default=None, description="Filter by company name (partial match)"),
+    posted: PostedFilter = Query(default=PostedFilter.any, description="Filter by posted_at recency"),
     country: str | None = Query(
         default=None,
         description="Filter by country code: US or IN. Omit (or pass ALL) to return listings from all countries.",
@@ -135,13 +127,9 @@ async def search_jobs(
             "EU shows EU + GLOBAL; IN shows IN + GLOBAL."
         ),
     ),
-    sort_by: SortBy = Query(
-        default=SortBy.posted_at, description="Sort results by: posted_at, match_score"
-    ),
+    sort_by: SortBy = Query(default=SortBy.posted_at, description="Sort results by: posted_at, match_score"),
     page: int = Query(default=1, ge=1, description="Page number"),
-    limit: int = Query(
-        default=20, ge=1, le=50, description="Results per page (max 50)"
-    ),
+    limit: int = Query(default=20, ge=1, le=50, description="Results per page (max 50)"),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ) -> JobSearchResponse:
@@ -161,7 +149,7 @@ async def search_jobs(
             page=page,
             limit=limit,
         )
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
         logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
@@ -184,23 +172,20 @@ async def _execute_search(
     stmt = select(Listing).where(Listing.is_active == True)  # noqa: E712
 
     # ── Geo-restriction market filter ─────────────────────────────────────────
-    # Only apply market filter when country param is not provided.
-    # When country is explicitly set, the country block below handles filtering.
-    if country is None:
-        market_upper = (market or "US").upper()
-        if market_upper == "EU":
-            stmt = stmt.where(Listing.geo_restriction.in_(["EU", "GLOBAL"]))
-        elif market_upper == "IN":
-            stmt = stmt.where(Listing.geo_restriction.in_(["IN", "GLOBAL"]))
-        else:
-            # Default (US): show US + GLOBAL + legacy unprocessed rows (NULL)
-            stmt = stmt.where(
-                or_(
-                    Listing.geo_restriction == "US",
-                    Listing.geo_restriction == "GLOBAL",
-                    Listing.geo_restriction.is_(None),
-                )
+    market_upper = (market or "US").upper()
+    if market_upper == "EU":
+        stmt = stmt.where(Listing.geo_restriction.in_(["EU", "GLOBAL"]))
+    elif market_upper == "IN":
+        stmt = stmt.where(Listing.geo_restriction.in_(["IN", "GLOBAL"]))
+    else:
+        # Default (US): show US + GLOBAL + legacy unprocessed rows (NULL)
+        stmt = stmt.where(
+            or_(
+                Listing.geo_restriction == "US",
+                Listing.geo_restriction == "GLOBAL",
+                Listing.geo_restriction.is_(None),
             )
+        )
 
     try:
         user_uuid = uuid.UUID(user_id_str)
@@ -231,16 +216,8 @@ async def _execute_search(
 
     if country is not None:
         country_upper = country.upper()
-        if country_upper == "IN":
-            stmt = stmt.where(Listing.geo_restriction.in_(["IN", "GLOBAL"]))
-        elif country_upper == "US":
-            stmt = stmt.where(
-                or_(
-                    Listing.geo_restriction == "US",
-                    Listing.geo_restriction == "GLOBAL",
-                    Listing.geo_restriction.is_(None),
-                )
-            )
+        if country_upper in ("US", "IN"):
+            stmt = stmt.where(Listing.country == country_upper)
 
     if posted != PostedFilter.any:
         cutoff = datetime.now(timezone.utc) - _POSTED_CUTOFFS[posted.value]
@@ -251,7 +228,9 @@ async def _execute_search(
 
     offset = (page - 1) * limit
     paginated = (
-        stmt.order_by(Listing.posted_at.desc().nulls_last()).offset(offset).limit(limit)
+        stmt.order_by(Listing.posted_at.desc().nulls_last())
+        .offset(offset)
+        .limit(limit)
     )
 
     rows = (await db.execute(paginated)).scalars().all()
@@ -279,9 +258,7 @@ async def _execute_search(
                     "seniority": pref_row.seniority,
                 }
         except Exception:
-            logger.warning(
-                "Failed to fetch job preferences for scoring — defaulting to null scores"
-            )
+            logger.warning("Failed to fetch job preferences for scoring — defaulting to null scores")
             prefs = None
 
     results: list[JobListingItem] = []
@@ -289,11 +266,9 @@ async def _execute_search(
         item = JobListingItem.model_validate(row)
 
         co = company_map.get(row.company_id) if row.company_id else None
-        item = item.model_copy(
-            update={
-                "company_summary": _build_company_summary(co, row.salary_range),
-            }
-        )
+        item = item.model_copy(update={
+            "company_summary": _build_company_summary(co, row.salary_range),
+        })
 
         if prefs is not None:
             job_dict = {
@@ -304,16 +279,14 @@ async def _execute_search(
                 "salary_range": row.salary_range,
             }
             score = compute_match_score(job_dict, prefs)
-            item = item.model_copy(
-                update={
-                    "match_score": score,
-                    "match_label": get_match_label(score),
-                }
-            )
+            item = item.model_copy(update={
+                "match_score": score,
+                "match_label": get_match_label(score),
+            })
         results.append(item)
 
     if sort_by == SortBy.match_score and prefs is not None:
-        results.sort(key=lambda x: x.match_score or 0, reverse=True)
+        results.sort(key=lambda x: (x.match_score or 0), reverse=True)
 
     return JobSearchResponse(
         total=total,
@@ -328,9 +301,7 @@ def _slugify(label: str) -> str:
     return slug.strip("-")
 
 
-@router.get(
-    "/sources", response_model=JobSourcesResponse, summary="List crawled job sources"
-)
+@router.get("/sources", response_model=JobSourcesResponse, summary="List crawled job sources")
 async def get_job_sources(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -348,7 +319,7 @@ async def get_job_sources(
             .order_by(Listing.source_label)
         )
         rows = (await db.execute(stmt)).all()
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
         logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
@@ -406,7 +377,7 @@ async def upsert_preferences(
         )
         await db.flush()
         record = await db.get(JobPreference, user_uuid)
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
         logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
@@ -429,7 +400,7 @@ async def get_preferences(
 
     try:
         record = await db.get(JobPreference, user_uuid)
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
         logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
@@ -471,7 +442,7 @@ async def create_saved_search(
         db.add(record)
         await db.flush()
         await db.refresh(record)
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
         logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
@@ -499,7 +470,7 @@ async def list_saved_searches(
             .order_by(SavedSearch.created_at.desc())
         )
         rows = (await db.execute(stmt)).scalars().all()
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
         logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
@@ -533,16 +504,14 @@ async def delete_saved_search(
         await db.flush()
     except HTTPException:
         raise
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
         logger.error("Database error deleting saved search", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return Response(status_code=204)
 
 
-@router.post(
-    "/hidden", status_code=204, summary="Hide a job listing for the current user"
-)
+@router.post("/hidden", status_code=204, summary="Hide a job listing for the current user")
 async def hide_job(
     body: HideJobRequest,
     db: AsyncSession = Depends(get_db),
@@ -566,7 +535,7 @@ async def hide_job(
     except IntegrityError:
         await db.rollback()
         raise HTTPException(status_code=409, detail="Job already hidden")
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
         logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
@@ -587,9 +556,7 @@ async def trigger_crawl(
 
     country = body.country.upper()
     if country not in ("US", "IN", "ALL"):
-        raise HTTPException(
-            status_code=422, detail="country must be 'US', 'IN', or 'ALL'"
-        )
+        raise HTTPException(status_code=422, detail="country must be 'US', 'IN', or 'ALL'")
 
     from app.crawler.tasks import crawl_all_companies
 
@@ -631,9 +598,7 @@ async def trigger_deactivate_stale(
     return {"status": "deactivation started", "task_id": result.id}
 
 
-@router.get(
-    "/{job_id}", response_model=JobListingDetail, summary="Get job listing detail"
-)
+@router.get("/{job_id}", response_model=JobListingDetail, summary="Get job listing detail")
 async def get_job(
     job_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
@@ -641,7 +606,7 @@ async def get_job(
 ) -> JobListingDetail:
     try:
         row = await db.get(Listing, job_id)
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
         logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 

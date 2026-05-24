@@ -17,6 +17,7 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -661,7 +662,7 @@ class TestRetryFailedDeliveries:
     async def test_retry_sends_when_previous_attempt_failed(self, db_session: AsyncSession):
         """A subscription with one 'failed' row old enough for backoff is retried and sent."""
         from datetime import timedelta
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import AsyncMock, patch, MagicMock
         from tests.conftest import _TestSession
         from app.alert_tasks import _async_retry_failed_deliveries, _RETRY_BASE_MINUTES
 
@@ -728,7 +729,7 @@ class TestRetryFailedDeliveries:
     async def test_retry_gives_up_after_max_retries(self, db_session: AsyncSession):
         """A subscription with _MAX_ALERT_RETRIES failed rows today is not retried again."""
         from datetime import timedelta
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import AsyncMock, patch, MagicMock
         from tests.conftest import _TestSession
         from app.alert_tasks import _async_retry_failed_deliveries, _MAX_ALERT_RETRIES, _RETRY_BASE_MINUTES
 

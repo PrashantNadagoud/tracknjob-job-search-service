@@ -12,10 +12,13 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from httpx import AsyncClient, ASGITransport
 
 from app.discovery.ats_prober import ATSProber, _derive_slug, ATS_PROBE_PATTERNS
 from app.discovery.yc_scraper import YCScraper
@@ -308,9 +311,9 @@ async def test_seed_orchestrator_skips_known_websites():
 
 
 @pytest.mark.asyncio
-async def test_seed_status_endpoint_shape(async_client, admin_headers):
+async def test_seed_status_endpoint_shape(async_client):
     """GET /api/v1/admin/seed-status returns expected top-level keys."""
-    resp = await async_client.get("/api/v1/admin/seed-status", headers=admin_headers)
+    resp = await async_client.get("/api/v1/admin/seed-status")
     assert resp.status_code == 200
     body = resp.json()
     assert "discovery_queue" in body
@@ -346,6 +349,7 @@ def test_run_yc_seed_task_has_correct_config():
 
 def test_ats_probe_patterns_cover_all_10_types():
     """Ensure the pattern dict covers the known ATS platforms."""
+    from app.discovery.ats_prober import ATS_PROBE_PATTERNS
 
     known_types = {
         "greenhouse",

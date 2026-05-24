@@ -2,6 +2,7 @@
 
 import uuid
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Listing

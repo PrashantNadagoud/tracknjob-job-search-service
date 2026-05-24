@@ -60,7 +60,7 @@ class SmartRecruitersCrawler(BaseATSCrawler):
                 city: str = loc.get("city") or ""
                 country_code: str = loc.get("country") or ""
                 is_remote: bool = bool(loc.get("remote"))
-                location_raw = ", ".join(filter(None, [city, country_code]))
+                location_raw = f"{city}, {country_code}".strip(", ")
                 work_type = "remote" if is_remote else "onsite"
                 geo_restriction = classify_listing(
                     location_raw=location_raw,

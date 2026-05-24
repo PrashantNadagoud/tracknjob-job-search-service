@@ -22,6 +22,7 @@ G3 — Additive-only writes (Guardrail 3)
 """
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -56,7 +57,9 @@ async def test_g1a_all_sources_fail_enriched_at_is_none():
     with (
         patch("app.enrichment.enricher.enrich_from_wikipedia", AsyncMock(side_effect=err)),
         patch("app.enrichment.enricher.enrich_from_linkedin", AsyncMock(side_effect=err)),
+        patch("app.enrichment.enricher.enrich_from_comparably", AsyncMock(side_effect=err)),
         patch("app.enrichment.enricher.enrich_from_builtin", AsyncMock(side_effect=err)),
+        patch("app.enrichment.enricher.enrich_salary_from_glassdoor", AsyncMock(side_effect=err)),
         patch("app.enrichment.enricher.asyncio.sleep", new_callable=AsyncMock),
     ):
         record = await enricher.enrich("test-g1a-co", "G1aCo", "Engineer", "Remote")
@@ -80,7 +83,9 @@ async def test_g1b_one_source_succeeds_enriched_at_is_set():
             AsyncMock(return_value=wiki_ok),
         ),
         patch("app.enrichment.enricher.enrich_from_linkedin", AsyncMock(side_effect=err)),
+        patch("app.enrichment.enricher.enrich_from_comparably", AsyncMock(side_effect=err)),
         patch("app.enrichment.enricher.enrich_from_builtin", AsyncMock(side_effect=err)),
+        patch("app.enrichment.enricher.enrich_salary_from_glassdoor", AsyncMock(side_effect=err)),
         patch("app.enrichment.enricher.asyncio.sleep", new_callable=AsyncMock),
     ):
         record = await enricher.enrich("test-g1b-co", "G1bCo", "Engineer", "Remote")
@@ -199,7 +204,7 @@ def test_g3a_existing_non_null_field_not_overwritten():
     record = _fresh_record(founded_year=2009)
     enricher._apply_validated(record, {"founded_year": 2015})
     assert record.founded_year == 2009, (
-        "G3 violation: existing founded_year 2009 overwritten with 2015"
+        f"G3 violation: existing founded_year 2009 overwritten with 2015"
     )
 
     record = _fresh_record(num_employees_range="201-500")

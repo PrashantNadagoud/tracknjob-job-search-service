@@ -2,9 +2,12 @@
 
 import uuid
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models import Listing
 from app.scoring import compute_match_score, get_match_label
+from tests.conftest import TEST_USER_ID
 
 
 class TestComputeMatchScore:

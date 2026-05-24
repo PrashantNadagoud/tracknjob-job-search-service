@@ -1,4 +1,4 @@
-from fastapi import Request, Depends, HTTPException, status
+from fastapi import Request
 from jose import JWTError, jwt
 
 from app.config import get_settings
@@ -11,7 +11,7 @@ async def get_current_user(request: Request) -> dict:
     if not auth_header.startswith("Bearer "):
         raise _UnauthorizedError("Missing or malformed Authorization header")
 
-    token = auth_header[len("Bearer ") :]
+    token = auth_header[len("Bearer "):]
     settings = get_settings()
 
     if not settings.TNJ_SECRET_KEY:
@@ -31,22 +31,12 @@ async def get_current_user(request: Request) -> dict:
     if sub and "@" in sub:
         import uuid
         import hashlib
-
         sub = str(uuid.UUID(hashlib.md5(sub.encode()).hexdigest()))
 
     if not sub:
         raise _UnauthorizedError("Token missing subject claim")
 
     return {"sub": str(sub), "email": str(payload.get("email", ""))}
-
-
-async def admin_required(current_user: dict = Depends(get_current_user)) -> dict:
-    settings = get_settings()
-    if not settings.ADMIN_USER_ID or current_user["sub"] != settings.ADMIN_USER_ID:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required"
-        )
-    return current_user
 
 
 class _UnauthorizedError(Exception):

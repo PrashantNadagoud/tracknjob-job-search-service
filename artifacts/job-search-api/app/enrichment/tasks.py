@@ -3,13 +3,13 @@ import asyncio
 import logging
 import os
 import re
+from datetime import datetime, timezone
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.celery_app import celery_app
-from app.config import get_settings
 from app.enrichment.enricher import CompanyEnricher
 
 logger = logging.getLogger(__name__)
@@ -43,10 +43,6 @@ def _slugify(name: str) -> str:
 
 
 async def _async_enrich_new_companies() -> None:
-    if not get_settings().ENRICHMENT_ENABLED:
-        logger.info("Enrichment disabled (ENRICHMENT_ENABLED=False) — skipping enrich_new_companies")
-        return
-
     async with _make_session() as session:
         async with session.begin():
             rows = await session.execute(
@@ -161,10 +157,6 @@ async def _async_enrich_new_companies() -> None:
 
 
 async def _async_reenrich_stale_companies() -> None:
-    if not get_settings().ENRICHMENT_ENABLED:
-        logger.info("Enrichment disabled (ENRICHMENT_ENABLED=False) — skipping reenrich_stale_companies")
-        return
-
     async with _make_session() as session:
         async with session.begin():
             rows = await session.execute(
