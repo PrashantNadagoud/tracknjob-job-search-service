@@ -54,6 +54,44 @@ _BROWSER_HEADERS = {
 _CSRF_COOKIE_NAMES = ("CALYPSO_CSRF_TOKEN", "csrf-token", "wd-csrf-token", "CSRF-TOKEN")
 _CSRF_HEADER_NAMES = ("x-csrf-token", "X-CSRF-Token")
 
+_COUNTRY_CODES = frozenset({"US", "CA", "GB", "AU", "DE", "FR", "IN", "NL", "IE", "SG"})
+
+
+def _parse_workday_location_slug(slug: str) -> str:
+    """Convert a Workday sitemap URL location segment into a clean display string.
+
+    Examples:
+        "US-CA-Santa-Clara"     → "Santa Clara, CA"
+        "Remote"                → "Remote"
+        "US-TX-Austin"          → "Austin, TX"
+        "New-York-NY"           → "New York, NY"
+        "US-Remote"             → "Remote"
+    """
+    parts = slug.split("-")
+    if not parts:
+        return slug
+
+    result_parts: list[str] = []
+    state_code: str | None = None
+    i = 0
+
+    if parts[0].upper() in _COUNTRY_CODES:
+        i = 1
+
+    for token in parts[i:]:
+        if len(token) == 2 and token.isalpha() and token.upper() == token:
+            state_code = token.upper()
+        else:
+            result_parts.append(token.title())
+
+    if not result_parts:
+        return state_code or slug.title()
+
+    city = " ".join(result_parts)
+    if state_code:
+        return f"{city}, {state_code}"
+    return city
+
 
 async def _fetch_csrf_token(
     client: Any,
@@ -368,7 +406,7 @@ class WorkdayCrawler(BaseATSCrawler):
                 if len(path_parts) > 1:
                     location_slug = path_parts[-2]
                     if location_slug and location_slug != "job":
-                        location = location_slug.replace("-", ", ")
+                        location = _parse_workday_location_slug(location_slug)
 
                 is_remote = "remote" in location.lower() or "remote" in title.lower()
                 work_type = "remote" if is_remote else "onsite"
