@@ -174,20 +174,23 @@ async def _execute_search(
     stmt = select(Listing).where(Listing.is_active == True)  # noqa: E712
 
     # ── Geo-restriction market filter ─────────────────────────────────────────
-    market_upper = (market or "US").upper()
-    if market_upper == "EU":
-        stmt = stmt.where(Listing.geo_restriction.in_(["EU", "GLOBAL"]))
-    elif market_upper == "IN":
-        stmt = stmt.where(Listing.geo_restriction.in_(["IN", "GLOBAL"]))
-    else:
-        # Default (US): show US + GLOBAL + legacy unprocessed rows (NULL)
-        stmt = stmt.where(
-            or_(
-                Listing.geo_restriction == "US",
-                Listing.geo_restriction == "GLOBAL",
-                Listing.geo_restriction.is_(None),
+    # Only apply market filter when country param is not provided.
+    # When country is explicitly set, the country block below handles filtering.
+    if country is None:
+        market_upper = (market or "US").upper()
+        if market_upper == "EU":
+            stmt = stmt.where(Listing.geo_restriction.in_(["EU", "GLOBAL"]))
+        elif market_upper == "IN":
+            stmt = stmt.where(Listing.geo_restriction.in_(["IN", "GLOBAL"]))
+        else:
+            # Default (US): show US + GLOBAL + legacy unprocessed rows (NULL)
+            stmt = stmt.where(
+                or_(
+                    Listing.geo_restriction == "US",
+                    Listing.geo_restriction == "GLOBAL",
+                    Listing.geo_restriction.is_(None),
+                )
             )
-        )
 
     try:
         user_uuid = uuid.UUID(user_id_str)
@@ -218,8 +221,16 @@ async def _execute_search(
 
     if country is not None:
         country_upper = country.upper()
-        if country_upper in ("US", "IN"):
-            stmt = stmt.where(Listing.country == country_upper)
+        if country_upper == "IN":
+            stmt = stmt.where(Listing.geo_restriction.in_(["IN", "GLOBAL"]))
+        elif country_upper == "US":
+            stmt = stmt.where(
+                or_(
+                    Listing.geo_restriction == "US",
+                    Listing.geo_restriction == "GLOBAL",
+                    Listing.geo_restriction.is_(None),
+                )
+            )
 
     if posted != PostedFilter.any:
         cutoff = datetime.now(timezone.utc) - _POSTED_CUTOFFS[posted.value]

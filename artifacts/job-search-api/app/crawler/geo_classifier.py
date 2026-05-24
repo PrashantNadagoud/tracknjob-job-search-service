@@ -5,6 +5,8 @@ Classifies each listing as one of:
   'EU'     — European-specific role
   'IN'     — India-specific role
   'GLOBAL' — Truly remote with no geographic restriction
+  'OTHER'  — Location present but not a recognised US/EU/IN market,
+             OR no location signal at all. Excluded from all market feeds.
   None     — Unprocessed legacy row (treated as US in the default feed)
 """
 
@@ -67,7 +69,7 @@ def classify_listing(
                       Pass None if not available.
 
     Returns:
-        'US', 'EU', 'IN', or 'GLOBAL'
+        'US', 'EU', 'IN', 'GLOBAL', or 'OTHER'
     """
     if country:
         c = country.lower().strip()
@@ -89,7 +91,7 @@ def classify_listing(
     if work_type in ("remote", "fully_remote"):
         return "GLOBAL"
 
-    return "US"
+    return "OTHER"
 
 
 def parse_greenhouse_location(job: dict[str, Any]) -> tuple[str, str | None]:
