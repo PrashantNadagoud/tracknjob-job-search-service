@@ -17,9 +17,6 @@ class Settings(BaseSettings):
     BREVO_FROM_EMAIL: str = "alerts@tracknjob.com"
     BREVO_FROM_NAME: str = "TrackNJob Alerts"
     ALERTS_ENABLED: bool = True
-    # Enrichment is dormant until a free-tier data source is configured.
-    # Set to True when Apollo.io / Crunchbase Basic / PDL key is available.
-    ENRICHMENT_ENABLED: bool = False
 
     # Crawler seed configuration (comma-separated lists)
     NAUKRI_KEYWORD_LIST: str = "software engineer,data engineer,product manager"

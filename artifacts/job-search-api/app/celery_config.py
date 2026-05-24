@@ -23,15 +23,14 @@ beat_schedule = {
         "task": "app.crawler.tasks.reactivate_errored_sources",
         "schedule": crontab(minute=30, hour="*/6"),
     },
-    # TODO: Re-enable when enricher sources are configured (ENRICHMENT_ENABLED=True)
-    # "enrich-new-companies-nightly": {
-    #     "task": "app.enrichment.tasks.enrich_new_companies",
-    #     "schedule": crontab(minute=0, hour=2),
-    # },
-    # "reenrich-stale-companies-weekly": {
-    #     "task": "app.enrichment.tasks.reenrich_stale_companies",
-    #     "schedule": crontab(minute=0, hour=3, day_of_week="sunday"),
-    # },
+    "enrich-new-companies-nightly": {
+        "task": "app.enrichment.tasks.enrich_new_companies",
+        "schedule": crontab(minute=0, hour=2),
+    },
+    "reenrich-stale-companies-weekly": {
+        "task": "app.enrichment.tasks.reenrich_stale_companies",
+        "schedule": crontab(minute=0, hour=3, day_of_week="sunday"),
+    },
     # Job alerts — runs every hour, self-filters per delivery_time_utc per subscription
     "send-daily-alerts": {
         "task": "app.alert_tasks.send_daily_alerts",

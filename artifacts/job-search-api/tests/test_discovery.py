@@ -311,9 +311,9 @@ async def test_seed_orchestrator_skips_known_websites():
 
 
 @pytest.mark.asyncio
-async def test_seed_status_endpoint_shape(async_client, admin_headers):
+async def test_seed_status_endpoint_shape(async_client):
     """GET /api/v1/admin/seed-status returns expected top-level keys."""
-    resp = await async_client.get("/api/v1/admin/seed-status", headers=admin_headers)
+    resp = await async_client.get("/api/v1/admin/seed-status")
     assert resp.status_code == 200
     body = resp.json()
     assert "discovery_queue" in body

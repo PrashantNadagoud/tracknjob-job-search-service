@@ -1,15 +1,13 @@
 """CompanyEnricher — orchestrates all enrichment sources concurrently.
 
-Active free sources (no paid API keys required):
+Free sources only (no paid API keys required):
   1. Wikipedia REST API + wikitext infobox  (primary: founded_year, employees, type, ticker)
   2. LinkedIn public /about/ page           (secondary: employees, founded_year)
-  3. BuiltIn scrape                         (remote_policy, perks)
+  3. Comparably scrape                      (culture_score, ceo_approval_pct, work_life_score)
+  4. BuiltIn scrape                         (remote_policy, perks)
+  5. Glassdoor salary scrape               (salary_min_usd, salary_max_usd)
 
 Yahoo Finance runs sequentially AFTER the gather if a stock_ticker was found.
-
-Future sources (dormant until API keys are configured):
-  - CrunchbaseEnricher (app/enrichment/crunchbase.py) — funding, headcount
-  - Apollo.io / People Data Labs free tier
 
 Funding fields (funding_total_usd, last_funding_type, last_funding_date) are
 always null — no free source populates them. The DB columns are preserved for
@@ -29,6 +27,8 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from app.enrichment.builtin import enrich_from_builtin
+from app.enrichment.comparably import enrich_from_comparably
+from app.enrichment.glassdoor import enrich_salary_from_glassdoor
 from app.enrichment.linkedin import enrich_from_linkedin
 from app.enrichment.wikipedia import _enrich_from_yahoo_finance, enrich_from_wikipedia
 
@@ -37,7 +37,9 @@ logger = logging.getLogger(__name__)
 # Seconds to sleep before each source's HTTP call (applied via _rate_limited
 # wrapper for existing sources that we do not modify internally).
 _RATE_LIMITS = {
+    "comparably": 1.0,
     "builtin": 1.0,
+    "glassdoor": 1.5,
 }
 
 # Canonical num_employees_range values accepted by _apply_validated (G2).
@@ -50,13 +52,14 @@ _VALID_EMPLOYEE_RANGES: frozenset[str] = frozenset({
 def generate_slugs(company_name: str) -> dict[str, str]:
     """Produce per-source slug variants from a company name.
 
-    Returns a dict with keys: linkedin, builtin, wikipedia.
+    Returns a dict with keys: linkedin, comparably, builtin, wikipedia.
 
     Example:
         generate_slugs("Cloudflare, Inc.") → {
-            "linkedin":  "cloudflare-inc",
-            "builtin":   "cloudflare-inc",
-            "wikipedia": "Cloudflare,_Inc.",
+            "linkedin":   "cloudflare-inc",
+            "comparably": "cloudflare-inc",
+            "builtin":    "cloudflare-inc",
+            "wikipedia":  "Cloudflare,_Inc.",
         }
     """
     base = company_name.lower()
@@ -65,6 +68,7 @@ def generate_slugs(company_name: str) -> dict[str, str]:
     base = re.sub(r"-+", "-", base)
     return {
         "linkedin": base,
+        "comparably": base,
         "builtin": base,
         "wikipedia": company_name.replace(" ", "_"),
     }
@@ -213,17 +217,22 @@ class CompanyEnricher:
         record = CompanyRecord(slug=company_slug, name=company_name)
         slugs = generate_slugs(company_name)
 
-        # ── Concurrent gather across three active sources ────────────────────
+        # ── Concurrent gather across all five sources ─────────────────────────
         # Wikipedia and LinkedIn handle their own internal rate-limit sleeps.
-        # BuiltIn is wrapped with _rate_limited.
+        # Comparably, BuiltIn, Glassdoor are wrapped with _rate_limited so we
+        # don't need to modify those existing files.
         (
             wiki_res,
             li_res,
+            comp_res,
             bi_res,
+            gd_res,
         ) = await asyncio.gather(
             enrich_from_wikipedia(slugs["wikipedia"]),
             enrich_from_linkedin(slugs["linkedin"]),
+            _rate_limited(_RATE_LIMITS["comparably"], enrich_from_comparably(slugs["comparably"])),
             _rate_limited(_RATE_LIMITS["builtin"], enrich_from_builtin(slugs["builtin"])),
+            _rate_limited(_RATE_LIMITS["glassdoor"], enrich_salary_from_glassdoor(primary_role, location)),
             return_exceptions=True,
         )
 
@@ -250,6 +259,16 @@ class CompanyEnricher:
         else:
             logger.warning("LinkedIn enrichment exception: %s", li_res)
 
+        if not isinstance(comp_res, Exception):
+            self._apply_validated(record, {
+                "culture_score": comp_res.culture_score,
+                "ceo_approval_pct": comp_res.ceo_approval_pct,
+                "work_life_score": comp_res.work_life_score,
+            })
+            record.enrichment_source.extend(comp_res.sources)
+        else:
+            logger.warning("Comparably enrichment exception: %s", comp_res)
+
         if not isinstance(bi_res, Exception):
             self._apply_validated(record, {
                 "remote_policy": bi_res.remote_policy,
@@ -258,6 +277,16 @@ class CompanyEnricher:
             record.enrichment_source.extend(bi_res.sources)
         else:
             logger.warning("BuiltIn enrichment exception: %s", bi_res)
+
+        if not isinstance(gd_res, Exception):
+            self._apply_validated(record, {
+                "salary_min_usd": gd_res.salary_min_usd,
+                "salary_max_usd": gd_res.salary_max_usd,
+                "salary_source": gd_res.salary_source,
+            })
+            record.enrichment_source.extend(gd_res.sources)
+        else:
+            logger.warning("Glassdoor enrichment exception: %s", gd_res)
 
         # ── Yahoo Finance: only if ticker already resolved ────────────────────
         # Runs sequentially after the gather so we use the merged ticker value.

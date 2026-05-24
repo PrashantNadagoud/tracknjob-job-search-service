@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from typing import Any
 
-from sqlalchemy import or_, pool, select, text
+from sqlalchemy import pool, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.celery_app import celery_app
@@ -371,16 +371,8 @@ async def _async_send_job_alerts() -> dict[str, int]:
                 stmt = stmt.where(Listing.company.ilike(f"%{company}%"))
 
             country = (filters.get("country") or "US").upper()
-            if country == "IN":
-                stmt = stmt.where(Listing.geo_restriction.in_(["IN", "GLOBAL"]))
-            elif country == "US":
-                stmt = stmt.where(
-                    or_(
-                        Listing.geo_restriction == "US",
-                        Listing.geo_restriction == "GLOBAL",
-                        Listing.geo_restriction.is_(None),
-                    )
-                )
+            if country in ("US", "IN"):
+                stmt = stmt.where(Listing.country == country)
 
             posted = filters.get("posted")
             if posted and posted in _posted_cutoffs:

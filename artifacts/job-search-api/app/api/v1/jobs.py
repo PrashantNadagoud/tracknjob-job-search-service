@@ -150,9 +150,7 @@ async def search_jobs(
             limit=limit,
         )
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
 
@@ -174,23 +172,20 @@ async def _execute_search(
     stmt = select(Listing).where(Listing.is_active == True)  # noqa: E712
 
     # ── Geo-restriction market filter ─────────────────────────────────────────
-    # Only apply market filter when country param is not provided.
-    # When country is explicitly set, the country block below handles filtering.
-    if country is None:
-        market_upper = (market or "US").upper()
-        if market_upper == "EU":
-            stmt = stmt.where(Listing.geo_restriction.in_(["EU", "GLOBAL"]))
-        elif market_upper == "IN":
-            stmt = stmt.where(Listing.geo_restriction.in_(["IN", "GLOBAL"]))
-        else:
-            # Default (US): show US + GLOBAL + legacy unprocessed rows (NULL)
-            stmt = stmt.where(
-                or_(
-                    Listing.geo_restriction == "US",
-                    Listing.geo_restriction == "GLOBAL",
-                    Listing.geo_restriction.is_(None),
-                )
+    market_upper = (market or "US").upper()
+    if market_upper == "EU":
+        stmt = stmt.where(Listing.geo_restriction.in_(["EU", "GLOBAL"]))
+    elif market_upper == "IN":
+        stmt = stmt.where(Listing.geo_restriction.in_(["IN", "GLOBAL"]))
+    else:
+        # Default (US): show US + GLOBAL + legacy unprocessed rows (NULL)
+        stmt = stmt.where(
+            or_(
+                Listing.geo_restriction == "US",
+                Listing.geo_restriction == "GLOBAL",
+                Listing.geo_restriction.is_(None),
             )
+        )
 
     try:
         user_uuid = uuid.UUID(user_id_str)
@@ -221,16 +216,8 @@ async def _execute_search(
 
     if country is not None:
         country_upper = country.upper()
-        if country_upper == "IN":
-            stmt = stmt.where(Listing.geo_restriction.in_(["IN", "GLOBAL"]))
-        elif country_upper == "US":
-            stmt = stmt.where(
-                or_(
-                    Listing.geo_restriction == "US",
-                    Listing.geo_restriction == "GLOBAL",
-                    Listing.geo_restriction.is_(None),
-                )
-            )
+        if country_upper in ("US", "IN"):
+            stmt = stmt.where(Listing.country == country_upper)
 
     if posted != PostedFilter.any:
         cutoff = datetime.now(timezone.utc) - _POSTED_CUTOFFS[posted.value]
@@ -333,9 +320,7 @@ async def get_job_sources(
         )
         rows = (await db.execute(stmt)).all()
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return JobSourcesResponse(
@@ -393,9 +378,7 @@ async def upsert_preferences(
         await db.flush()
         record = await db.get(JobPreference, user_uuid)
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return JobPreferencesResponse.model_validate(record)
@@ -418,9 +401,7 @@ async def get_preferences(
     try:
         record = await db.get(JobPreference, user_uuid)
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     if record is None:
@@ -462,9 +443,7 @@ async def create_saved_search(
         await db.flush()
         await db.refresh(record)
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return SavedSearchResponse.model_validate(record)
@@ -492,9 +471,7 @@ async def list_saved_searches(
         )
         rows = (await db.execute(stmt)).scalars().all()
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return SavedSearchListResponse(
@@ -528,7 +505,7 @@ async def delete_saved_search(
     except HTTPException:
         raise
     except SQLAlchemyError as e:
-        logger.error(f"Database error deleting saved search: {e}")
+        logger.error("Database error deleting saved search", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return Response(status_code=204)
@@ -559,9 +536,7 @@ async def hide_job(
         await db.rollback()
         raise HTTPException(status_code=409, detail="Job already hidden")
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     return Response(status_code=204)
@@ -632,9 +607,7 @@ async def get_job(
     try:
         row = await db.get(Listing, job_id)
     except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Database error", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     if row is None or not row.is_active:
