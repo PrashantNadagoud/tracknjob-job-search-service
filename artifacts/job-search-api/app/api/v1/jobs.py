@@ -218,8 +218,16 @@ async def _execute_search(
 
     if country is not None:
         country_upper = country.upper()
-        if country_upper in ("US", "IN"):
-            stmt = stmt.where(Listing.country == country_upper)
+        if country_upper == "IN":
+            stmt = stmt.where(Listing.geo_restriction.in_(["IN", "GLOBAL"]))
+        elif country_upper == "US":
+            stmt = stmt.where(
+                or_(
+                    Listing.geo_restriction == "US",
+                    Listing.geo_restriction == "GLOBAL",
+                    Listing.geo_restriction.is_(None),
+                )
+            )
 
     if posted != PostedFilter.any:
         cutoff = datetime.now(timezone.utc) - _POSTED_CUTOFFS[posted.value]

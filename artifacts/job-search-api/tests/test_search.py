@@ -22,7 +22,7 @@ def _job(
     title: str = "Test Job",
     company: str = "TestCo",
     remote: bool = False,
-    country: str = "US",
+    geo_restriction: str | None = "US",
     posted_at: datetime | None = None,
     is_active: bool = True,
 ) -> Listing:
@@ -34,7 +34,8 @@ def _job(
         source_url=f"http://test-{suffix}",
         source_label=source_label,
         posted_at=posted_at or datetime.now(timezone.utc),
-        country=country,
+        country="US",
+        geo_restriction=geo_restriction,
         last_seen_at=datetime.now(timezone.utc),
         is_active=is_active,
     )
@@ -82,28 +83,46 @@ class TestSearch:
     ):
         src = f"test-cus-{uuid.uuid4().hex[:8]}"
         for i in range(2):
-            db_session.add(_job(suffix=f"{src}-us{i}", source_label=src, country="US"))
+            db_session.add(_job(suffix=f"{src}-us{i}", source_label=src, geo_restriction="US"))
         for i in range(2):
-            db_session.add(_job(suffix=f"{src}-in{i}", source_label=src, country="IN"))
+            db_session.add(_job(suffix=f"{src}-in{i}", source_label=src, geo_restriction="IN"))
         await db_session.commit()
 
-        # country=US with source filter (source filter is source_label exact match)
+        # country=US should return only US geo_restriction rows (not IN)
         resp = await async_client.get(
             f"/api/v1/jobs/search?source={src}&country=US", headers=auth_headers
         )
         assert resp.status_code == 200
         body = resp.json()
         assert body["total"] == 2
-        assert all(r["country"] == "US" for r in body["results"])
+        assert all(r["geo_restriction"] == "US" for r in body["results"])
+
+    async def test_search_country_filter_us_includes_global(
+        self, async_client, auth_headers, db_session: AsyncSession
+    ):
+        src = f"test-cus-glob-{uuid.uuid4().hex[:8]}"
+        db_session.add(_job(suffix=f"{src}-us", source_label=src, geo_restriction="US"))
+        db_session.add(_job(suffix=f"{src}-glob", source_label=src, geo_restriction="GLOBAL"))
+        db_session.add(_job(suffix=f"{src}-in", source_label=src, geo_restriction="IN"))
+        await db_session.commit()
+
+        resp = await async_client.get(
+            f"/api/v1/jobs/search?source={src}&country=US", headers=auth_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 2
+        restrictions = {r["geo_restriction"] for r in body["results"]}
+        assert restrictions == {"US", "GLOBAL"}
 
     async def test_search_country_filter_india(
         self, async_client, auth_headers, db_session: AsyncSession
     ):
         src = f"test-cin-{uuid.uuid4().hex[:8]}"
         for i in range(2):
-            db_session.add(_job(suffix=f"{src}-us{i}", source_label=src, country="US"))
+            db_session.add(_job(suffix=f"{src}-us{i}", source_label=src, geo_restriction="US"))
         for i in range(2):
-            db_session.add(_job(suffix=f"{src}-in{i}", source_label=src, country="IN"))
+            db_session.add(_job(suffix=f"{src}-in{i}", source_label=src, geo_restriction="IN"))
         await db_session.commit()
 
         resp = await async_client.get(
@@ -112,16 +131,16 @@ class TestSearch:
         assert resp.status_code == 200
         body = resp.json()
         assert body["total"] == 2
-        assert all(r["country"] == "IN" for r in body["results"])
+        assert all(r["geo_restriction"] == "IN" for r in body["results"])
 
     async def test_search_country_all(
         self, async_client, auth_headers, db_session: AsyncSession
     ):
         src = f"test-call-{uuid.uuid4().hex[:8]}"
         for i in range(2):
-            db_session.add(_job(suffix=f"{src}-us{i}", source_label=src, country="US"))
+            db_session.add(_job(suffix=f"{src}-us{i}", source_label=src, geo_restriction="US"))
         for i in range(2):
-            db_session.add(_job(suffix=f"{src}-in{i}", source_label=src, country="IN"))
+            db_session.add(_job(suffix=f"{src}-in{i}", source_label=src, geo_restriction="IN"))
         await db_session.commit()
 
         resp = await async_client.get(
@@ -136,9 +155,9 @@ class TestSearch:
     ):
         src = f"test-comit-{uuid.uuid4().hex[:8]}"
         for i in range(2):
-            db_session.add(_job(suffix=f"{src}-us{i}", source_label=src, country="US"))
+            db_session.add(_job(suffix=f"{src}-us{i}", source_label=src, geo_restriction="US"))
         for i in range(2):
-            db_session.add(_job(suffix=f"{src}-in{i}", source_label=src, country="IN"))
+            db_session.add(_job(suffix=f"{src}-in{i}", source_label=src, geo_restriction="IN"))
         await db_session.commit()
 
         resp = await async_client.get(
