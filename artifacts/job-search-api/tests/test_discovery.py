@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -312,22 +311,9 @@ async def test_seed_orchestrator_skips_known_websites():
 
 
 @pytest.mark.asyncio
-@patch('app.api.v1.admin.AsyncSession.execute')
-async def test_seed_status_endpoint_shape(mock_execute, async_client, admin_headers):
+async def test_seed_status_endpoint_shape(async_client):
     """GET /api/v1/admin/seed-status returns expected top-level keys."""
-    class MockResultQueue:
-        def scalar(self): return 10
-        def fetchall(self): return []
-    class MockResultDate:
-        def scalar(self): return datetime.now(timezone.utc)
-        def fetchall(self): return []
-    def execute_side_effect(stmt, *args, **kwargs):
-        if "last_seen_at" in str(stmt):
-            return MockResultDate()
-        return MockResultQueue()
-    mock_execute.side_effect = execute_side_effect
-
-    resp = await async_client.get("/api/v1/admin/seed-status", headers=admin_headers)
+    resp = await async_client.get("/api/v1/admin/seed-status")
     assert resp.status_code == 200
     body = resp.json()
     assert "discovery_queue" in body

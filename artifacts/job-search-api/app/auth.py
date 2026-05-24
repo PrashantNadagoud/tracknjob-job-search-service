@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, Request
+from fastapi import Request
 from jose import JWTError, jwt
 
 from app.config import get_settings
@@ -37,14 +37,6 @@ async def get_current_user(request: Request) -> dict:
         raise _UnauthorizedError("Token missing subject claim")
 
     return {"sub": str(sub), "email": str(payload.get("email", ""))}
-
-
-async def admin_required(current_user: dict = Depends(get_current_user)) -> dict:
-    """Dependency to ensure the user is an administrator."""
-    settings = get_settings()
-    if not settings.ADMIN_USER_ID or current_user.get("sub") != settings.ADMIN_USER_ID:
-        raise HTTPException(status_code=403, detail="Forbidden")
-    return current_user
 
 
 class _UnauthorizedError(Exception):

@@ -1,4 +1,4 @@
-"""Admin API — internal-use endpoints, requires admin authentication.
+"""Admin API — internal-use endpoints, no authentication required.
 
 Endpoints:
     GET /seed-status   — aggregate counts for discovery queue, ATS sources, listings.
@@ -12,10 +12,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import admin_required
 from app.db import get_db
 
-router = APIRouter(dependencies=[Depends(admin_required)])
+router = APIRouter()
 
 
 @router.get("/seed-status", response_model=None)
