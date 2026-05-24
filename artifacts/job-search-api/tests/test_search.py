@@ -150,7 +150,7 @@ class TestSearch:
         body = resp.json()
         assert body["total"] == 4
 
-    async def test_search_country_omitted_returns_all(
+    async def test_search_country_omitted_defaults_to_us_market(
         self, async_client, auth_headers, db_session: AsyncSession
     ):
         src = f"test-comit-{uuid.uuid4().hex[:8]}"
@@ -160,12 +160,14 @@ class TestSearch:
             db_session.add(_job(suffix=f"{src}-in{i}", source_label=src, geo_restriction="IN"))
         await db_session.commit()
 
+        # No country param → default US market filter applies → only US rows returned
         resp = await async_client.get(
             f"/api/v1/jobs/search?source={src}", headers=auth_headers
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["total"] == 4
+        assert body["total"] == 2
+        assert all(r["geo_restriction"] == "US" for r in body["results"])
 
     async def test_search_excludes_inactive_jobs(
         self, async_client, auth_headers, db_session: AsyncSession

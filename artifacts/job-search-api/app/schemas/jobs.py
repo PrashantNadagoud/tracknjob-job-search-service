@@ -21,6 +21,7 @@ class JobListingItem(BaseModel):
     tags: list[str] | None = None
     salary_range: str | None = None
     country: str = "US"
+    geo_restriction: str | None = None
     last_seen_at: datetime | None = None
     department: str | None = None
     match_score: int | None = None
