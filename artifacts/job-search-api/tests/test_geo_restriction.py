@@ -154,15 +154,15 @@ class TestClassifyListing:
                 f"classify_listing({location!r}) returned {result!r}, expected 'OTHER'"
             )
 
-    def test_blank_location_still_defaults_to_us(self):
-        """Legacy rows with no location at all should still default to US."""
+    def test_blank_location_returns_other(self):
+        """No location + no signals → OTHER (not US). Keeps unknowns out of all feeds."""
         result = classify_listing(
             location_raw="",
             description="",
             work_type="",
             country=None,
         )
-        assert result == "US"
+        assert result == "OTHER"
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +364,7 @@ class TestBackfillLogic:
         ("Hyderabad", "", False, "IN", "IN"),
         ("Remote", "Must be located in the US", True, None, "US"),
         ("Remote - EMEA", "", True, "EU", "EU"),
-        ("", "", False, None, "US"),        # blank location → legacy default US
+        ("", "", False, None, "OTHER"),     # blank/no signal → OTHER (not US)
         ("Taiwan Taipei", "", False, None, "OTHER"),   # unrecognized onsite → OTHER
         ("Singapore", "", False, None, "OTHER"),        # APAC onsite → OTHER
         ("Tokyo, Japan", "", False, None, "OTHER"),     # APAC onsite → OTHER
