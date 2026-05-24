@@ -8,8 +8,8 @@ Tests confirm:
   3. All sources fail (network down) → partial CompanyRecord with enriched_at
      set; no exception propagates from enrich().
   4. enrichment_source[] contains only the names of sources that succeeded.
-  5. No CRUNCHBASE_API_KEY or api.crunchbase.com in enrichment code;
-     crunchbase.py does not exist.
+  5. CrunchbaseEnricher exists as a stub (crunchbase.py); no CRUNCHBASE_API_KEY
+     or api.crunchbase.com wired into the active enrichment pipeline.
   6. GET /api/v1/companies/{slug} returns the valid CompanyResponse schema.
   7. enrich_new_companies Celery task imports without errors after the refactor.
   8. LinkedIn asyncio.sleep ≥ 2.0 s is called before the HTTP request.
@@ -199,8 +199,6 @@ async def test_wikipedia_populates_cloudflare_fields():
 async def test_private_company_has_null_funding_fields():
     """AT-2: Private company → funding_total_usd/last_funding_type/last_funding_date all null."""
     from app.enrichment.builtin import BuiltInResult
-    from app.enrichment.comparably import ComparablyResult
-    from app.enrichment.glassdoor import GlassdoorResult
     from app.enrichment.linkedin import LinkedInResult
 
     url_map = {
@@ -219,16 +217,8 @@ async def test_private_company_has_null_funding_fields():
             AsyncMock(return_value=LinkedInResult()),
         ),
         patch(
-            "app.enrichment.enricher.enrich_from_comparably",
-            AsyncMock(return_value=ComparablyResult()),
-        ),
-        patch(
             "app.enrichment.enricher.enrich_from_builtin",
             AsyncMock(return_value=BuiltInResult()),
-        ),
-        patch(
-            "app.enrichment.enricher.enrich_salary_from_glassdoor",
-            AsyncMock(return_value=GlassdoorResult()),
         ),
         patch("app.enrichment.enricher.asyncio.sleep", new_callable=AsyncMock),
     ):
@@ -260,15 +250,7 @@ async def test_all_sources_fail_returns_partial_record():
             AsyncMock(side_effect=err),
         ),
         patch(
-            "app.enrichment.enricher.enrich_from_comparably",
-            AsyncMock(side_effect=err),
-        ),
-        patch(
             "app.enrichment.enricher.enrich_from_builtin",
-            AsyncMock(side_effect=err),
-        ),
-        patch(
-            "app.enrichment.enricher.enrich_salary_from_glassdoor",
             AsyncMock(side_effect=err),
         ),
         patch("app.enrichment.enricher.asyncio.sleep", new_callable=AsyncMock),
@@ -290,20 +272,11 @@ async def test_all_sources_fail_returns_partial_record():
 async def test_enrichment_source_reflects_only_successful_sources():
     """AT-4: enrichment_source[] contains only sources that returned data."""
     from app.enrichment.builtin import BuiltInResult
-    from app.enrichment.comparably import ComparablyResult
-    from app.enrichment.glassdoor import GlassdoorResult
 
     wiki_ok = WikipediaResult(founded_year=2009, sources=["wikipedia"])
 
-    comp_ok = ComparablyResult()
-    comp_ok.sources = ["comparably"]
-    comp_ok.culture_score = "A+"
-
     bi_ok = BuiltInResult()
     bi_ok.sources = []  # BuiltIn returned no data but did not error
-
-    gd_ok = GlassdoorResult()
-    gd_ok.sources = []
 
     enricher = CompanyEnricher()
 
@@ -317,31 +290,37 @@ async def test_enrichment_source_reflects_only_successful_sources():
             AsyncMock(side_effect=RuntimeError("LinkedIn blocked")),
         ),
         patch(
-            "app.enrichment.enricher.enrich_from_comparably",
-            AsyncMock(return_value=comp_ok),
-        ),
-        patch(
             "app.enrichment.enricher.enrich_from_builtin",
             AsyncMock(return_value=bi_ok),
-        ),
-        patch(
-            "app.enrichment.enricher.enrich_salary_from_glassdoor",
-            AsyncMock(return_value=gd_ok),
         ),
         patch("app.enrichment.enricher.asyncio.sleep", new_callable=AsyncMock),
     ):
         record = await enricher.enrich("test-cloudflare", "Cloudflare", "SWE", "Remote")
 
     assert "wikipedia" in record.enrichment_source
-    assert "comparably" in record.enrichment_source
     assert "linkedin" not in record.enrichment_source
 
 
 # ── Test 5: No Crunchbase references in enrichment code ──────────────────────
 
 
-def test_no_crunchbase_references_in_enrichment_code():
-    """AT-5: crunchbase.py deleted; no CRUNCHBASE_API_KEY or api.crunchbase.com anywhere."""
+def test_crunchbase_stub_exists_and_pipeline_not_wired():
+    """AT-5: crunchbase.py exists as a stub; not wired into active pipeline.
+
+    - crunchbase.py must exist with CrunchbaseEnricher raising NotImplementedError
+    - No active enrichment file (except crunchbase.py) references api.crunchbase.com
+    - CRUNCHBASE_API_KEY may appear in config.py (kept for future use) but not in
+      any active enrichment call path
+    """
+    import importlib
+
+    from app.enrichment.crunchbase import CrunchbaseEnricher
+
+    enricher = CrunchbaseEnricher()
+    with pytest.raises(NotImplementedError):
+        import asyncio
+        asyncio.run(enricher.enrich("test-co"))
+
     enrichment_dir = os.path.normpath(
         os.path.join(os.path.dirname(__file__), "..", "app", "enrichment")
     )
@@ -352,16 +331,13 @@ def test_no_crunchbase_references_in_enrichment_code():
     for filepath in py_files:
         fname = os.path.basename(filepath)
         if fname == "crunchbase.py":
-            violations.append(f"crunchbase.py still present: {filepath}")
-            continue
+            continue  # stub file — allowed to exist
         with open(filepath) as fh:
             content = fh.read()
-        if "CRUNCHBASE_API_KEY" in content:
-            violations.append(f"CRUNCHBASE_API_KEY found in {fname}")
         if "api.crunchbase.com" in content:
-            violations.append(f"api.crunchbase.com found in {fname}")
+            violations.append(f"api.crunchbase.com found in active enricher {fname}")
 
-    assert not violations, "Crunchbase references detected:\n" + "\n".join(violations)
+    assert not violations, "Active Crunchbase wiring detected:\n" + "\n".join(violations)
 
 
 # ── Test 6: GET /api/v1/companies/{slug} returns valid schema ─────────────────

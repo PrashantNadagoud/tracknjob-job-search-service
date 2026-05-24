@@ -56,9 +56,7 @@ async def test_g1a_all_sources_fail_enriched_at_is_none():
     with (
         patch("app.enrichment.enricher.enrich_from_wikipedia", AsyncMock(side_effect=err)),
         patch("app.enrichment.enricher.enrich_from_linkedin", AsyncMock(side_effect=err)),
-        patch("app.enrichment.enricher.enrich_from_comparably", AsyncMock(side_effect=err)),
         patch("app.enrichment.enricher.enrich_from_builtin", AsyncMock(side_effect=err)),
-        patch("app.enrichment.enricher.enrich_salary_from_glassdoor", AsyncMock(side_effect=err)),
         patch("app.enrichment.enricher.asyncio.sleep", new_callable=AsyncMock),
     ):
         record = await enricher.enrich("test-g1a-co", "G1aCo", "Engineer", "Remote")
@@ -82,9 +80,7 @@ async def test_g1b_one_source_succeeds_enriched_at_is_set():
             AsyncMock(return_value=wiki_ok),
         ),
         patch("app.enrichment.enricher.enrich_from_linkedin", AsyncMock(side_effect=err)),
-        patch("app.enrichment.enricher.enrich_from_comparably", AsyncMock(side_effect=err)),
         patch("app.enrichment.enricher.enrich_from_builtin", AsyncMock(side_effect=err)),
-        patch("app.enrichment.enricher.enrich_salary_from_glassdoor", AsyncMock(side_effect=err)),
         patch("app.enrichment.enricher.asyncio.sleep", new_callable=AsyncMock),
     ):
         record = await enricher.enrich("test-g1b-co", "G1bCo", "Engineer", "Remote")

@@ -140,6 +140,29 @@ class TestClassifyListing:
         )
         assert result == "US"
 
+    def test_unrecognized_onsite_location_classifies_as_other(self):
+        """TRA-352: non-US/EU/IN onsite locations must not default to US."""
+        for location in ["Taiwan Taipei", "Singapore", "Tokyo, Japan", "São Paulo, Brazil"]:
+            result = classify_listing(
+                location_raw=location,
+                description="",
+                work_type="",
+                country=None,
+            )
+            assert result == "OTHER", (
+                f"classify_listing({location!r}) returned {result!r}, expected 'OTHER'"
+            )
+
+    def test_blank_location_returns_other(self):
+        """No location + no signals → OTHER (not US). Keeps unknowns out of all feeds."""
+        result = classify_listing(
+            location_raw="",
+            description="",
+            work_type="",
+            country=None,
+        )
+        assert result == "OTHER"
+
 
 # ---------------------------------------------------------------------------
 # Integration: search endpoint geo filtering
@@ -272,6 +295,26 @@ async def test_market_in_returns_in_and_global_only(
 
 
 @pytest.mark.asyncio
+async def test_other_geo_restriction_excluded_from_default_feed(
+    async_client: AsyncClient,
+    db_session: AsyncSession,
+    auth_headers: dict,
+):
+    """TRA-352: Jobs with geo_restriction='OTHER' (e.g. Taiwan, Singapore) must
+    not appear in the default US feed."""
+    other_job = await _insert_listing(db_session, geo_restriction="OTHER", suffix="other-apac")
+
+    resp = await async_client.get(
+        "/api/v1/jobs/search",
+        params={"company": "GeoTestCorp"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    returned_ids = {r["id"] for r in resp.json()["results"]}
+    assert str(other_job.id) not in returned_ids, "OTHER job must not appear in default US feed"
+
+
+@pytest.mark.asyncio
 async def test_legacy_null_row_appears_in_default_feed(
     async_client: AsyncClient,
     db_session: AsyncSession,
@@ -320,7 +363,11 @@ class TestBackfillLogic:
         ("Hyderabad", "", False, "IN", "IN"),
         ("Remote", "Must be located in the US", True, None, "US"),
         ("Remote - EMEA", "", True, "EU", "EU"),
-        ("", "", False, None, "US"),  # no signals → default US
+        ("", "", False, None, "OTHER"),     # blank/no signal → OTHER (not US)
+        ("Taiwan Taipei", "", False, None, "OTHER"),   # unrecognized onsite → OTHER
+        ("Singapore", "", False, None, "OTHER"),        # APAC onsite → OTHER
+        ("Tokyo, Japan", "", False, None, "OTHER"),     # APAC onsite → OTHER
+        ("São Paulo, Brazil", "", False, None, "OTHER"),  # LATAM onsite → OTHER
     ]
 
     def test_backfill_classifications(self):
