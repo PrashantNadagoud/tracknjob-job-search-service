@@ -91,7 +91,12 @@ def classify_listing(
     if work_type in ("remote", "fully_remote"):
         return "GLOBAL"
 
-    return "OTHER"
+    # Only classify as OTHER when there's a non-empty location that didn't
+    # match any known signal — empty/null location rows default to US.
+    if location_raw and location_raw.strip():
+        return "OTHER"
+
+    return "US"
 
 
 def parse_greenhouse_location(job: dict[str, Any]) -> tuple[str, str | None]:
