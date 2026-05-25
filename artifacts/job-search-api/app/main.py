@@ -1,4 +1,6 @@
+import logging
 import os
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 
@@ -8,6 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1.admin import router as admin_router
@@ -16,14 +19,39 @@ from app.api.v1.companies import router as companies_router
 from app.api.v1.jobs import router as jobs_router
 from app.auth import _UnauthorizedError
 from app.config import get_settings
+from app.crawler.geo_classifier import load_geonames_index
+from app.db import AsyncSessionFactory
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load GeoNames city index into memory at startup."""
+    try:
+        async with AsyncSessionFactory() as session:
+            rows = (
+                await session.execute(
+                    text("SELECT name, ascii_name, country_code FROM geo.cities ORDER BY population DESC")
+                )
+            ).fetchall()
+            load_geonames_index([(r[0], r[1], r[2]) for r in rows])
+    except Exception:
+        logger.warning(
+            "GeoNames index could not be loaded (geo.cities table may not exist yet). "
+            "Signal-string fallback will be used.",
+            exc_info=True,
+        )
+    yield
+
 
 app = FastAPI(
     title="Job Search API",
     version="0.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 app.add_middleware(

@@ -415,6 +415,27 @@ class AlertSubscription(Base):
     )
 
 
+class GeoCity(Base):
+    """GeoNames city lookup table loaded from cities500.txt.
+
+    Populated once by scripts/load_geonames.py; used at runtime for
+    O(1) city-name → country-code lookups in the geo classifier.
+    """
+
+    __tablename__ = "cities"
+    __table_args__ = (
+        Index("idx_geo_cities_name_lower", sa.text("lower(name)")),
+        Index("idx_geo_cities_ascii_lower", sa.text("lower(ascii_name)")),
+        {"schema": "geo"},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    ascii_name: Mapped[str] = mapped_column(Text, nullable=False)
+    country_code: Mapped[str] = mapped_column(sa.CHAR(2), nullable=False)
+    population: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+
 class AlertDelivery(Base):
     """Tracks every alert email send attempt for a subscription."""
 
