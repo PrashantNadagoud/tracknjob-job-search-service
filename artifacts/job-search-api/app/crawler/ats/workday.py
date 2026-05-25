@@ -29,6 +29,7 @@ CSRF handling:
 """
 
 import logging
+import re
 import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -53,6 +54,34 @@ _BROWSER_HEADERS = {
 
 _CSRF_COOKIE_NAMES = ("CALYPSO_CSRF_TOKEN", "csrf-token", "wd-csrf-token", "CSRF-TOKEN")
 _CSRF_HEADER_NAMES = ("x-csrf-token", "X-CSRF-Token")
+
+# Regex for PwC-style internal title encoding.
+# PwC India prefixes titles with a 2-letter country code followed by _ or -
+# e.g. "IN_Senior Associate ..." or "IN-Senior Associate ..."
+# A space may follow the separator: "IN- Senior Associate ..."
+_WORKDAY_INTERNAL_TITLE_RE = re.compile(
+    r"^[A-Z]{2}[-_]\s*"  # Leading country code prefix: IN_ / IN- / IN- (with space)
+)
+
+
+def _clean_workday_title(raw: str) -> str:
+    """Clean internal Workday title encoding used by some tenants (e.g. PwC India).
+
+    PwC stores titles like:
+      ``IN-Senior Associate_SAP FICO_Enterprise Apps SAP_Advisory_Mumbai``
+      ``IN_Senior Associate _Agentic + Gen AI_ _AI-50_ Advisory_ Bangalore``
+      ``IN-Associate|Oracle fusion finance|Enterprise Apps-Oracle|Advisory|Kolkata``
+    This function:
+    1. Strips the leading 2-letter country prefix (``IN-``, ``IN_``, ``US-``, etc.)
+    2. Replaces pipe ``|`` and underscore ``_`` field delimiters with spaces
+    3. Collapses runs of whitespace
+    """
+    if not raw:
+        return raw
+    title = _WORKDAY_INTERNAL_TITLE_RE.sub("", raw)
+    title = title.replace("|", " ").replace("_", " ")
+    title = re.sub(r" {2,}", " ", title).strip()
+    return title
 
 
 async def _fetch_csrf_token(
@@ -241,9 +270,19 @@ class WorkdayCrawler(BaseATSCrawler):
                 for posting in postings:
                     external_id = posting.get("bulletFields", [None])[0] or str(posting.get("title", ""))
                     ext_path = posting.get("externalPath", "")
-                    source_url = f"{base_url}{ext_path}" if ext_path else api_url
+                    if ext_path:
+                        # Workday CXS returns externalPath as "/CareerSiteName/job/City/Title_ID"
+                        # The public apply URL requires /en-US/ locale prefix injected after the domain:
+                        # https://slug.wdN.myworkdayjobs.com/en-US/CareerSiteName/job/City/Title_ID
+                        # Without /en-US/ Workday redirects to the community error page.
+                        if not ext_path.startswith("/en-US/"):
+                            ext_path = "/en-US" + ext_path
+                        source_url = f"{base_url}{ext_path}"
+                    else:
+                        source_url = api_url
 
-                    title = posting.get("title", "Position")
+                    raw_title = posting.get("title", "Position")
+                    title = _clean_workday_title(raw_title)
                     location = posting.get("locationsText", location_filter)
                     is_remote = "remote" in location.lower() or "remote" in title.lower()
                     work_type = "remote" if is_remote else "onsite"
