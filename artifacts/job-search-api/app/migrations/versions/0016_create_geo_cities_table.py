@@ -1,7 +1,7 @@
 """Create geo.cities table for GeoNames city lookup.
 
-Revision ID: 0010
-Revises: (no prior revision tracked in versions/)
+Revision ID: 0016
+Revises: 0015
 Create Date: 2026-05-25
 
 This migration creates the geo schema and geo.cities table used by the
@@ -12,8 +12,8 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision = "0010"
-down_revision = None
+revision = "0016"
+down_revision = "0015"
 branch_labels = None
 depends_on = None
 
