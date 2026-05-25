@@ -28,25 +28,31 @@ import app.crawler.geo_classifier as _gc_module
 # ---------------------------------------------------------------------------
 
 def _load_sample_index():
-    """Load a representative subset of the GeoNames dataset for testing."""
+    """Load a representative subset of the GeoNames dataset for testing.
+
+    Rows are ordered by population DESC (highest first) so that the most
+    populous city wins when the same name exists in multiple countries —
+    matching the ORDER BY population DESC used in the real startup query.
+    """
     rows = [
-        # India
-        ("Gurugram",       "Gurugram",        "IN"),
-        ("Gurgaon",        "Gurgaon",         "IN"),
+        # India (high population → listed first so they win on duplicate names)
         ("Mumbai",         "Mumbai",           "IN"),
+        ("New Delhi",      "New Delhi",        "IN"),
         ("Bengaluru",      "Bengaluru",        "IN"),
         ("Bangalore",      "Bangalore",        "IN"),
         ("Hyderabad",      "Hyderabad",        "IN"),
         ("Chennai",        "Chennai",          "IN"),
         ("Pune",           "Pune",             "IN"),
-        ("New Delhi",      "New Delhi",        "IN"),
+        ("Gurugram",       "Gurugram",         "IN"),
+        ("Gurgaon",        "Gurgaon",          "IN"),
         # US
         ("New York City",  "New York City",    "US"),
+        ("Chicago",        "Chicago",          "US"),
         ("San Francisco",  "San Francisco",    "US"),
         ("Seattle",        "Seattle",          "US"),
         ("Austin",         "Austin",           "US"),
-        ("Chicago",        "Chicago",          "US"),
-        # EU
+        # EU — London GB listed before smaller London CA
+        ("London",         "London",           "GB"),
         ("Berlin",         "Berlin",           "DE"),
         ("Paris",          "Paris",            "FR"),
         ("Amsterdam",      "Amsterdam",        "NL"),
@@ -54,15 +60,14 @@ def _load_sample_index():
         ("Warsaw",         "Warsaw",           "PL"),
         ("Stockholm",      "Stockholm",        "SE"),
         ("Zurich",         "Zurich",           "CH"),
-        ("London",         "London",           "GB"),
         # Other markets (should return None from classify_by_geonames)
-        ("Makati",         "Makati",           "PH"),
-        ("Ho Chi Minh City", "Ho Chi Minh City", "VN"),
         ("Seoul",          "Seoul",            "KR"),
-        ("Kuala Lumpur",   "Kuala Lumpur",     "MY"),
-        ("Tel Aviv",       "Tel Aviv",         "IL"),
-        ("Singapore",      "Singapore",        "SG"),
         ("Tokyo",          "Tokyo",            "JP"),
+        ("Kuala Lumpur",   "Kuala Lumpur",     "MY"),
+        ("Singapore",      "Singapore",        "SG"),
+        ("Ho Chi Minh City", "Ho Chi Minh City", "VN"),
+        ("Tel Aviv",       "Tel Aviv",         "IL"),
+        ("Makati",         "Makati",           "PH"),
     ]
     load_geonames_index(rows)
 

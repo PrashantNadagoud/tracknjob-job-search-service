@@ -68,16 +68,19 @@ _EU_COUNTRY_CODES: frozenset[str] = frozenset({
 _geonames_index: dict[str, str] | None = None
 
 
-def load_geonames_index(city_rows: list[tuple[str, str, str]]) -> None:
+def load_geonames_index(city_rows: list[tuple[str, str, str, int] | tuple[str, str, str]]) -> None:
     """Populate the in-memory GeoNames index from DB rows.
 
     Args:
-        city_rows: List of (name, ascii_name, country_code) tuples as returned
-                   by a query on geo.cities.  Call this once at app startup.
+        city_rows: List of (name, ascii_name, country_code[, population]) tuples.
+                   When population is included rows should be pre-sorted by population
+                   DESC so the most populous city wins on duplicate names.
+                   Call this once at app startup.
     """
     global _geonames_index
     index: dict[str, str] = {}
-    for name, ascii_name, country_code in city_rows:
+    for row in city_rows:
+        name, ascii_name, country_code = row[0], row[1], row[2]
         cc = country_code.upper()
         key_name = name.strip().lower()
         key_ascii = ascii_name.strip().lower()
