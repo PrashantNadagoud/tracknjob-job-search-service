@@ -16,3 +16,5 @@ venv/
 .ruff_cache/
 celerybeat-schedule
 celerybeat.pid
+cities500.txt
+cities500.zip
