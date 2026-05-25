@@ -271,6 +271,214 @@ class TestWorkdayCrawler:
         assert len(jobs) == 0
 
 
+# ── _clean_workday_title (unit tests, no I/O) ─────────────────────────────────
+
+class TestCleanWorkdayTitle:
+    """Tests for the PwC-style internal title cleanup helper (TRA-360)."""
+
+    from app.crawler.ats.workday import _clean_workday_title as _fn
+
+    def test_pwc_india_title_strips_country_prefix(self):
+        from app.crawler.ats.workday import _clean_workday_title
+        raw = "IN_Senior Associate _Agentic + Gen AI_ _AI-50_ Advisory_ Bangalore"
+        result = _clean_workday_title(raw)
+        assert not result.startswith("IN_")
+        assert "Senior Associate" in result
+
+    def test_pwc_india_title_no_leading_underscores(self):
+        from app.crawler.ats.workday import _clean_workday_title
+        raw = "IN_Manager_Oracle fusion SCM_Enterprise Apps- Oracle Advisory_Kolkata"
+        result = _clean_workday_title(raw)
+        assert not result.startswith("IN_")
+        assert "Manager" in result
+        assert "_" not in result
+
+    def test_pwc_india_hyphen_prefix_stripped(self):
+        from app.crawler.ats.workday import _clean_workday_title
+        raw = "IN-Senior Associate_SAP FICO_Enterprise Apps SAP_Advisory_Mumbai"
+        result = _clean_workday_title(raw)
+        assert not result.startswith("IN-")
+        assert "Senior Associate" in result
+        assert "_" not in result
+
+    def test_pwc_india_hyphen_prefix_with_space(self):
+        from app.crawler.ats.workday import _clean_workday_title
+        raw = "IN- Senior Associate_ Java fullstack developer_ EU&R _Advisory_ Kolkata"
+        result = _clean_workday_title(raw)
+        assert not result.startswith("IN")
+        assert "Senior Associate" in result
+
+    def test_pwc_pipe_delimiter_replaced(self):
+        from app.crawler.ats.workday import _clean_workday_title
+        raw = "IN-Associate|Oracle fusion finance|Enterprise Apps-Oracle|Advisory|Kolkata"
+        result = _clean_workday_title(raw)
+        assert "|" not in result
+        assert "Oracle fusion finance" in result
+
+    def test_us_prefix_stripped(self):
+        from app.crawler.ats.workday import _clean_workday_title
+        result = _clean_workday_title("US_Staff Engineer_Cloud")
+        assert not result.startswith("US_")
+        assert "Staff Engineer" in result
+
+    def test_legitimate_in_house_title_unchanged(self):
+        from app.crawler.ats.workday import _clean_workday_title
+        result = _clean_workday_title("In-house Legal Counsel - Generalist")
+        assert result == "In-house Legal Counsel - Generalist"
+
+    def test_title_without_prefix_unchanged(self):
+        from app.crawler.ats.workday import _clean_workday_title
+        result = _clean_workday_title("Senior Software Engineer")
+        assert result == "Senior Software Engineer"
+
+    def test_empty_string_returned_as_is(self):
+        from app.crawler.ats.workday import _clean_workday_title
+        assert _clean_workday_title("") == ""
+
+    def test_none_returned_as_none(self):
+        from app.crawler.ats.workday import _clean_workday_title
+        assert _clean_workday_title(None) is None
+
+    def test_collapses_extra_whitespace(self):
+        from app.crawler.ats.workday import _clean_workday_title
+        raw = "IN_Senior Associate _Agentic + Gen AI_ _AI-50_ Advisory_ Bangalore"
+        result = _clean_workday_title(raw)
+        assert "  " not in result
+
+
+# ── WorkdayCrawler CXS: en-US URL prefix (TRA-360) ───────────────────────────
+
+class TestWorkdayCrawlerCxsUrlFix:
+    """Regression tests for the apply-URL bug (TRA-360).
+
+    The Workday CXS API returns externalPath without the /en-US/ locale prefix.
+    Without the prefix Workday redirects the browser to the community page.
+    """
+
+    @pytest.fixture(autouse=True)
+    def mock_db_session(self):
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.fetchone.return_value = (
+            {"instance": "wd3", "career_site_name": "Global_Experienced_Careers"},
+            "India",
+        )
+        mock_db.execute.return_value = mock_result
+
+        class MockSessionContext:
+            async def __aenter__(self):
+                return mock_db
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
+
+        with patch("app.crawler.ats.workday.AsyncSessionFactory", MagicMock(return_value=MockSessionContext())):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_source_url_has_en_us_prefix(self):
+        """source_url built from externalPath must include /en-US/ locale segment."""
+        ats_source_id = uuid.uuid4()
+        crawler = WorkdayCrawler()
+
+        cxs_response = {
+            "jobPostings": [
+                {
+                    "title": "IN_Senior Associate _Advisory_ Bangalore",
+                    "locationsText": "Bengaluru Millenia, India",
+                    "externalPath": "/Global_Experienced_Careers/job/Bengaluru-Millenia/IN-Senior-Associate_JR12345",
+                    "bulletFields": ["JR12345"],
+                }
+            ]
+        }
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = cxs_response
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            jobs = await crawler.crawl("pwc", ats_source_id)
+
+        assert len(jobs) == 1
+        assert "/en-US/" in jobs[0]["source_url"], (
+            f"source_url missing /en-US/ prefix: {jobs[0]['source_url']}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_source_url_not_double_prefixed(self):
+        """If externalPath already starts with /en-US/ it must not be duplicated."""
+        ats_source_id = uuid.uuid4()
+        crawler = WorkdayCrawler()
+
+        cxs_response = {
+            "jobPostings": [
+                {
+                    "title": "Senior Consultant",
+                    "locationsText": "Mumbai, India",
+                    "externalPath": "/en-US/Global_Experienced_Careers/job/Mumbai/Senior-Consultant_JR99999",
+                    "bulletFields": ["JR99999"],
+                }
+            ]
+        }
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = cxs_response
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            jobs = await crawler.crawl("pwc", ats_source_id)
+
+        assert len(jobs) == 1
+        url = jobs[0]["source_url"]
+        assert url.count("/en-US/") == 1, f"Duplicate /en-US/ in URL: {url}"
+
+    @pytest.mark.asyncio
+    async def test_pwc_title_cleaned_in_cxs_response(self):
+        """Titles with IN_ prefix are cleaned before being stored."""
+        ats_source_id = uuid.uuid4()
+        crawler = WorkdayCrawler()
+
+        cxs_response = {
+            "jobPostings": [
+                {
+                    "title": "IN_Senior Associate _Agentic + Gen AI_ _AI-50_ Advisory_ Bangalore",
+                    "locationsText": "Bengaluru Millenia, India",
+                    "externalPath": "/Global_Experienced_Careers/job/Bengaluru-Millenia/IN-Senior_JR12345",
+                    "bulletFields": ["JR12345"],
+                }
+            ]
+        }
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = cxs_response
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            jobs = await crawler.crawl("pwc", ats_source_id)
+
+        assert len(jobs) == 1
+        title = jobs[0]["title"]
+        assert not title.startswith("IN_"), f"Raw internal prefix not stripped: {title!r}"
+        assert "Senior Associate" in title
+
+
 # ── BambooHRCrawler ───────────────────────────────────────────────────────────
 
 class TestBambooHRCrawler:
