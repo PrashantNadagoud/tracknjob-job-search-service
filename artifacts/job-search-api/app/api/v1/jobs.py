@@ -175,8 +175,9 @@ async def _execute_search(
     # country=ALL bypasses the market filter entirely (used for cross-market search).
     # country=IN/EU acts as an implicit market override when no explicit market given.
     country_upper = (country or "").upper()
-    effective_market = (market or "").upper() or country_upper or "US"
-    if country_upper == "ALL":
+    market_upper = (market or "").upper()
+    effective_market = market_upper or country_upper or "US"
+    if effective_market == "ALL":
         pass  # no geo_restriction filter — return all markets
     elif effective_market == "EU":
         stmt = stmt.where(Listing.geo_restriction.in_(["EU", "GLOBAL"]))

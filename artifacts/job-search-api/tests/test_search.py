@@ -140,10 +140,8 @@ class TestSearch:
         self, async_client, auth_headers, db_session: AsyncSession
     ):
         src = f"test-comit-{uuid.uuid4().hex[:8]}"
-        for i in range(2):
-            db_session.add(_job(suffix=f"{src}-us{i}", source_label=src, country="US"))
-        for i in range(2):
-            db_session.add(_job(suffix=f"{src}-in{i}", source_label=src, country="IN"))
+        for i in range(4):
+            db_session.add(_job(suffix=f"{src}-{i}", source_label=src, country="US"))
         await db_session.commit()
 
         resp = await async_client.get(
