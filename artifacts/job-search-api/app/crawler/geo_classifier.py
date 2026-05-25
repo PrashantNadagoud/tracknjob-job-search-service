@@ -6,9 +6,20 @@ Classifies each listing as one of:
   'IN'     — India-specific role
   'GLOBAL' — Truly remote with no geographic restriction
   None     — Unprocessed legacy row (treated as US in the default feed)
+
+Classification pipeline (in priority order):
+  1. Structured country code from ATS JSON (Greenhouse/Ashby/Lever)
+  2. GeoNames city lookup  ← TRA-362
+  3. Existing INDIA/EU/US signal strings (safety net)
+  4. Remote work_type → GLOBAL
+  5. Fallback → OTHER / US
 """
 
+import logging
+import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 EUROPE_SIGNALS = [
     "germany", "france", "uk", "united kingdom", "netherlands",
@@ -33,6 +44,100 @@ US_SIGNALS = [
     "denver", "atlanta", "dallas", "remote us", "remote - us",
     "us only", "must be located in the us",
 ]
+
+
+# ---------------------------------------------------------------------------
+# GeoNames city lookup (TRA-362)
+# ---------------------------------------------------------------------------
+
+# ISO 3166-1 alpha-2 codes for EU/EEA countries.
+_EU_COUNTRY_CODES: frozenset[str] = frozenset({
+    "AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI",
+    "FR", "GR", "HR", "HU", "IE", "IT", "LT", "LU", "LV", "MT",
+    "NL", "PL", "PT", "RO", "SE", "SI", "SK",
+    # EEA non-EU but typically treated as EU market
+    "IS", "LI", "NO",
+    # UK (post-Brexit still common in EU job boards)
+    "GB",
+    # Switzerland
+    "CH",
+})
+
+# In-memory dict: lowercase city name/ascii_name → ISO country code (2-char).
+# Loaded lazily at first use via load_geonames_index().
+_geonames_index: dict[str, str] | None = None
+
+
+def load_geonames_index(city_rows: list[tuple[str, str, str]]) -> None:
+    """Populate the in-memory GeoNames index from DB rows.
+
+    Args:
+        city_rows: List of (name, ascii_name, country_code) tuples as returned
+                   by a query on geo.cities.  Call this once at app startup.
+    """
+    global _geonames_index
+    index: dict[str, str] = {}
+    for name, ascii_name, country_code in city_rows:
+        cc = country_code.upper()
+        key_name = name.strip().lower()
+        key_ascii = ascii_name.strip().lower()
+        if key_name:
+            index.setdefault(key_name, cc)
+        if key_ascii and key_ascii != key_name:
+            index.setdefault(key_ascii, cc)
+    _geonames_index = index
+    logger.info("GeoNames index loaded: %d city entries", len(index))
+
+
+def _country_to_market(country_code: str) -> str | None:
+    """Map an ISO country code to a geo-restriction market label.
+
+    Returns 'US', 'EU', 'IN', or None (no match — will fall through to OTHER).
+    """
+    cc = country_code.upper()
+    if cc in ("US",):
+        return "US"
+    if cc in ("IN",):
+        return "IN"
+    if cc in _EU_COUNTRY_CODES:
+        return "EU"
+    return None
+
+
+def _tokenize_location(location_raw: str) -> list[str]:
+    """Split a raw location string into candidate city-name tokens.
+
+    Handles common patterns such as:
+      "San Francisco, CA"  → ["san francisco", "ca", "san francisco ca"]
+      "Ho Chi Minh City, VN" → ["ho chi minh city", "vn"]
+      "Berlin"             → ["berlin"]
+    """
+    text = location_raw.strip().lower()
+    parts = [p.strip() for p in re.split(r"[,/|]", text) if p.strip()]
+    tokens: list[str] = list(parts)
+    if len(parts) >= 2:
+        tokens.append(" ".join(parts[:2]))
+    tokens.append(text)
+    return list(dict.fromkeys(t for t in tokens if t))
+
+
+def classify_by_geonames(location_raw: str) -> str | None:
+    """Return a market label ('US', 'EU', 'IN') by looking up city names from
+    the GeoNames index, or None if no match is found.
+
+    Falls back gracefully to None when the index has not been loaded yet so
+    that the pipeline continues to the signal-string fallback.
+    """
+    if _geonames_index is None:
+        return None
+
+    for token in _tokenize_location(location_raw):
+        cc = _geonames_index.get(token)
+        if cc:
+            market = _country_to_market(cc)
+            if market:
+                return market
+    return None
 
 
 def detect_geo_restriction(location_raw: str, description: str = "") -> str | None:
@@ -71,6 +176,7 @@ def classify_listing(
     Returns:
         'US', 'EU', 'IN', 'GLOBAL', or 'OTHER'
     """
+    # Step 1: Structured country code from ATS JSON
     if country:
         c = country.lower().strip()
         if c in ("us", "usa", "united states"):
@@ -83,6 +189,12 @@ def classify_listing(
         if c in ("in", "india"):
             return "IN"
 
+    # Step 2: GeoNames city lookup (TRA-362)
+    geonames_result = classify_by_geonames(location_raw)
+    if geonames_result:
+        return geonames_result
+
+    # Step 3: Signal-string heuristics (safety net)
     restriction = detect_geo_restriction(location_raw, description)
 
     if restriction:

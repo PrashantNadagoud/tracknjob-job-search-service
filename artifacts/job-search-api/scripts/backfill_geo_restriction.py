@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """One-time backfill script: classify geo_restriction for all legacy listings.
 
-Run after deploying migration 0007:
+Run after deploying the geo.cities migration and loading GeoNames data:
+    python scripts/load_geonames.py --file /path/to/cities500.txt
     python scripts/backfill_geo_restriction.py
 
 Processes all rows where geo_restriction IS NULL in batches of 500.
 Prints a summary breakdown at the end.
+
+TRA-362: The script now pre-loads the GeoNames city index so that
+classify_listing() uses the GeoNames lookup (step 2) during backfill in
+addition to the signal-string heuristics.  If geo.cities is empty or not
+yet populated the backfill still runs — it just uses the signal strings.
 """
 
 import asyncio
@@ -21,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from sqlalchemy import pool, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.crawler.geo_classifier import classify_listing
+from app.crawler.geo_classifier import classify_listing, load_geonames_index
 
 BATCH_SIZE = 500
 
@@ -43,6 +49,19 @@ async def run() -> None:
     Session = _make_session()
     counts: dict[str, int] = {"US": 0, "EU": 0, "IN": 0, "GLOBAL": 0}
     total = 0
+
+    # TRA-362: Pre-load GeoNames index so classify_listing step 2 fires.
+    async with Session() as session:
+        try:
+            rows = (
+                await session.execute(
+                    text("SELECT name, ascii_name, country_code FROM geo.cities")
+                )
+            ).fetchall()
+            load_geonames_index([(r[0], r[1], r[2]) for r in rows])
+            print(f"GeoNames index loaded: {len(rows)} entries", flush=True)
+        except Exception as exc:
+            print(f"WARNING: Could not load GeoNames index ({exc}). Signal fallback only.", flush=True)
 
     async with Session() as session:
         while True:
