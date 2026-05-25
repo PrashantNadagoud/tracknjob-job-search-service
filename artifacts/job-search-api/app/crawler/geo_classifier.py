@@ -22,7 +22,9 @@ EUROPE_SIGNALS = [
 
 INDIA_SIGNALS = [
     "india", "bangalore", "bengaluru", "hyderabad", "pune",
-    "mumbai", "chennai", "noida", "gurgaon", "apac",
+    "mumbai", "chennai", "noida", "gurgaon", "gurugram",
+    "kolkata", "calcutta", "new delhi", "delhi", "ahmedabad",
+    "jaipur", "kochi", "coimbatore", "apac",
 ]
 
 US_SIGNALS = [
@@ -67,7 +69,7 @@ def classify_listing(
                       Pass None if not available.
 
     Returns:
-        'US', 'EU', 'IN', or 'GLOBAL'
+        'US', 'EU', 'IN', 'GLOBAL', or 'OTHER'
     """
     if country:
         c = country.lower().strip()
@@ -89,7 +91,7 @@ def classify_listing(
     if work_type in ("remote", "fully_remote"):
         return "GLOBAL"
 
-    return "US"
+    return "OTHER"
 
 
 def parse_greenhouse_location(job: dict[str, Any]) -> tuple[str, str | None]:
@@ -117,7 +119,7 @@ def parse_greenhouse_location(job: dict[str, Any]) -> tuple[str, str | None]:
         ]):
             return combined, "EU"
 
-        if any(sig in combined for sig in ["india", "bangalore", "hyderabad", "pune"]):
+        if any(sig in combined for sig in ["india", "bangalore", "hyderabad", "pune", "gurugram", "gurgaon", "kolkata", "noida", "mumbai", "chennai", "delhi"]):
             return combined, "IN"
 
         if any(sig in combined for sig in [

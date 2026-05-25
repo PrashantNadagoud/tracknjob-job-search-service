@@ -178,12 +178,11 @@ async def _execute_search(
     elif market_upper == "IN":
         stmt = stmt.where(Listing.geo_restriction.in_(["IN", "GLOBAL"]))
     else:
-        # Default (US): show US + GLOBAL + legacy unprocessed rows (NULL)
+        # Default (US): show US + GLOBAL only
         stmt = stmt.where(
             or_(
                 Listing.geo_restriction == "US",
                 Listing.geo_restriction == "GLOBAL",
-                Listing.geo_restriction.is_(None),
             )
         )
 
