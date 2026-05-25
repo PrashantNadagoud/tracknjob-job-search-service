@@ -23,9 +23,13 @@ def _job(
     company: str = "TestCo",
     remote: bool = False,
     country: str = "US",
+    geo_restriction: str | None = None,
     posted_at: datetime | None = None,
     is_active: bool = True,
 ) -> Listing:
+    # Derive geo_restriction from country when not explicitly set
+    if geo_restriction is None:
+        geo_restriction = country if country in ("US", "IN", "EU") else "US"
     return Listing(
         title=title,
         company=company,
@@ -35,6 +39,7 @@ def _job(
         source_label=source_label,
         posted_at=posted_at or datetime.now(timezone.utc),
         country=country,
+        geo_restriction=geo_restriction,
         last_seen_at=datetime.now(timezone.utc),
         is_active=is_active,
     )
@@ -135,10 +140,8 @@ class TestSearch:
         self, async_client, auth_headers, db_session: AsyncSession
     ):
         src = f"test-comit-{uuid.uuid4().hex[:8]}"
-        for i in range(2):
-            db_session.add(_job(suffix=f"{src}-us{i}", source_label=src, country="US"))
-        for i in range(2):
-            db_session.add(_job(suffix=f"{src}-in{i}", source_label=src, country="IN"))
+        for i in range(4):
+            db_session.add(_job(suffix=f"{src}-{i}", source_label=src, country="US"))
         await db_session.commit()
 
         resp = await async_client.get(

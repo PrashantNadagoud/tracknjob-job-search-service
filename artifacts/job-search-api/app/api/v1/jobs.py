@@ -172,10 +172,16 @@ async def _execute_search(
     stmt = select(Listing).where(Listing.is_active == True)  # noqa: E712
 
     # ── Geo-restriction market filter ─────────────────────────────────────────
-    market_upper = (market or "US").upper()
-    if market_upper == "EU":
+    # country=ALL bypasses the market filter entirely (used for cross-market search).
+    # country=IN/EU acts as an implicit market override when no explicit market given.
+    country_upper = (country or "").upper()
+    market_upper = (market or "").upper()
+    effective_market = market_upper or country_upper or "US"
+    if effective_market == "ALL":
+        pass  # no geo_restriction filter — return all markets
+    elif effective_market == "EU":
         stmt = stmt.where(Listing.geo_restriction.in_(["EU", "GLOBAL"]))
-    elif market_upper == "IN":
+    elif effective_market == "IN":
         stmt = stmt.where(Listing.geo_restriction.in_(["IN", "GLOBAL"]))
     else:
         # Default (US): show US + GLOBAL + legacy unprocessed rows (NULL)
