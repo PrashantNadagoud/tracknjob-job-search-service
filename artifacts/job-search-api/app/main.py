@@ -27,9 +27,8 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Load GeoNames city index into memory at startup."""
+async def _load_geonames_background() -> None:
+    """Load GeoNames city index in the background after server starts."""
     try:
         async with AsyncSessionFactory() as session:
             rows = (
@@ -37,7 +36,7 @@ async def lifespan(app: FastAPI):
                     session.execute(
                         text("SELECT name, ascii_name, country_code FROM geo.cities ORDER BY population DESC")
                     ),
-                    timeout=10.0,
+                    timeout=15.0,
                 )
             ).fetchall()
             load_geonames_index([(r[0], r[1], r[2]) for r in rows])
@@ -47,6 +46,12 @@ async def lifespan(app: FastAPI):
             "Signal-string fallback will be used.",
             exc_info=True,
         )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start background tasks after server is ready to serve requests."""
+    asyncio.create_task(_load_geonames_background())
     yield
 
 
