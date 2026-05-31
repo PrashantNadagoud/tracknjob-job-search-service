@@ -3,6 +3,7 @@ uvicorn[standard]
 sqlalchemy[asyncio]>=2.0
 asyncpg
 alembic
+psycopg2-binary>=2.9
 python-jose[cryptography]
 python-dotenv
 pydantic-settings

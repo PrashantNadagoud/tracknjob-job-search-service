@@ -1,12 +1,10 @@
-import asyncio
 import os
 from logging.config import fileConfig
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from alembic import context
 from dotenv import load_dotenv
-from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy import engine_from_config, pool
 
 load_dotenv()
 
@@ -20,11 +18,11 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def _build_asyncpg_url(raw_url: str) -> tuple[str, dict]:
+def _build_psycopg2_url(raw_url: str) -> tuple[str, dict]:
     url = raw_url
     for prefix, replacement in [
-        ("postgresql://", "postgresql+asyncpg://"),
-        ("postgres://", "postgresql+asyncpg://"),
+        ("postgres://", "postgresql://"),
+        ("postgresql+asyncpg://", "postgresql://"),
     ]:
         if url.startswith(prefix):
             url = replacement + url[len(prefix):]
@@ -37,25 +35,22 @@ def _build_asyncpg_url(raw_url: str) -> tuple[str, dict]:
     new_query = urlencode({k: v[0] for k, v in params.items()})
     clean_url = urlunparse(parsed._replace(query=new_query))
 
-    connect_args: dict = {}
+    connect_args: dict = {"connect_timeout": 10}
     if sslmode and sslmode not in ("disable", "allow"):
-        connect_args["ssl"] = True
-    else:
-        connect_args["ssl"] = False
-    connect_args["timeout"] = 10
+        connect_args["sslmode"] = sslmode
 
     return clean_url, connect_args
 
 
 _raw_url = os.environ["DATABASE_URL"]
-_async_url, _connect_args = _build_asyncpg_url(_raw_url)
+_sync_url, _connect_args = _build_psycopg2_url(_raw_url)
 
-config.set_main_option("sqlalchemy.url", _async_url)
+config.set_main_option("sqlalchemy.url", _sync_url)
 
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=_async_url,
+        url=_sync_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -75,23 +70,18 @@ def do_run_migrations(connection) -> None:
         context.run_migrations()
 
 
-async def run_async_migrations() -> None:
+def run_migrations_online() -> None:
     cfg_section = config.get_section(config.config_ini_section, {})
-    cfg_section["sqlalchemy.url"] = _async_url
+    cfg_section["sqlalchemy.url"] = _sync_url
 
-    connectable = async_engine_from_config(
+    connectable = engine_from_config(
         cfg_section,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
         connect_args=_connect_args,
     )
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
-    await connectable.dispose()
-
-
-def run_migrations_online() -> None:
-    asyncio.run(run_async_migrations())
+    with connectable.connect() as connection:
+        do_run_migrations(connection)
 
 
 if context.is_offline_mode():
