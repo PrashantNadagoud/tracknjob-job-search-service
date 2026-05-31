@@ -42,6 +42,7 @@ def _build_asyncpg_url(raw_url: str) -> tuple[str, dict]:
         connect_args["ssl"] = True
     else:
         connect_args["ssl"] = False
+    connect_args["timeout"] = 10
 
     return clean_url, connect_args
 
