@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -32,8 +33,11 @@ async def lifespan(app: FastAPI):
     try:
         async with AsyncSessionFactory() as session:
             rows = (
-                await session.execute(
-                    text("SELECT name, ascii_name, country_code FROM geo.cities ORDER BY population DESC")
+                await asyncio.wait_for(
+                    session.execute(
+                        text("SELECT name, ascii_name, country_code FROM geo.cities ORDER BY population DESC")
+                    ),
+                    timeout=10.0,
                 )
             ).fetchall()
             load_geonames_index([(r[0], r[1], r[2]) for r in rows])
