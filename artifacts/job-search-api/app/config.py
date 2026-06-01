@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     REDIS_URL: str = "redis://localhost:6379/0"
     TNJ_SECRET_KEY: str
-    TNJ_FRONTEND_URL: str
+    TNJ_FRONTEND_URL: str  # comma-separated list of allowed origins
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
     OPENAI_API_KEY: str = ""
@@ -28,6 +28,9 @@ class Settings(BaseSettings):
         "env_file_encoding": "utf-8",
         "extra": "ignore"
     }
+
+    def allowed_origins(self) -> list[str]:
+        return [o.strip() for o in self.TNJ_FRONTEND_URL.split(",") if o.strip()]
 
     def naukri_keywords(self) -> list[str]:
         return [k.strip() for k in self.NAUKRI_KEYWORD_LIST.split(",") if k.strip()]
