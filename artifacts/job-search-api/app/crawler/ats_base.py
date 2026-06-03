@@ -97,6 +97,39 @@ class BaseATSCrawler(ABC):
         except Exception as exc:
             raise CrawlException(f"Unexpected error posting to {url}: {exc}") from exc
 
+    async def _get_rendered_text(self, url: str) -> str:
+        """Fetch page content via Playwright headless Chromium.
+
+        Used as a fallback when httpx requests are blocked by WAFs that check
+        TLS fingerprints or IP reputation (e.g. Workday returning HTTP 500 from
+        cloud datacenter IPs).  Returns empty string on any Playwright error.
+        """
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            logger.error("playwright not installed; cannot render %s", url)
+            return ""
+
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                try:
+                    context = await browser.new_context(
+                        user_agent=(
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/120.0.0.0 Safari/537.36"
+                        )
+                    )
+                    page = await context.new_page()
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                    return await page.content()
+                finally:
+                    await browser.close()
+        except Exception as exc:
+            logger.warning("Playwright fetch failed for %s: %s", url, exc)
+            return ""
+
     @abstractmethod
     async def crawl(
         self, ats_slug: str, ats_source_id: uuid.UUID

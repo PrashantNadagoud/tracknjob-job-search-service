@@ -351,6 +351,7 @@ class WorkdayCrawler(BaseATSCrawler):
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
 
+        sitemap_text: str = ""
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0),
             headers=sitemap_headers,
@@ -368,11 +369,28 @@ class WorkdayCrawler(BaseATSCrawler):
                     raise RateLimitedException(
                         f"429 Rate Limited for {sitemap_url}", http_status=429
                     )
+                elif e.response.status_code in (403, 500):
+                    logger.warning(
+                        "httpx blocked (HTTP %s) for %s — retrying with Playwright",
+                        e.response.status_code,
+                        sitemap_url,
+                    )
+                    sitemap_text = await self._get_rendered_text(sitemap_url)
+                    if not sitemap_text:
+                        raise CrawlException(
+                            f"HTTP {e.response.status_code} for {sitemap_url} "
+                            f"(Playwright fallback also failed)",
+                            http_status=e.response.status_code,
+                        )
                 else:
                     raise CrawlException(
                         f"HTTP {e.response.status_code} for {sitemap_url}",
                         http_status=e.response.status_code,
                     )
+
+        pre_match = re.search(r"<pre[^>]*>([\s\S]*?)</pre>", sitemap_text, re.IGNORECASE)
+        if pre_match:
+            sitemap_text = pre_match.group(1).strip()
 
         try:
             root = ET.fromstring(sitemap_text)
