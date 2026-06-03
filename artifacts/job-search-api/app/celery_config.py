@@ -1,10 +1,10 @@
 from celery.schedules import crontab
 
 beat_schedule = {
-    # ATS-driven pipeline — primary nightly crawl (replaces crawl_all_companies schedule)
-    "run-crawl-pipeline-nightly": {
+    # ATS-driven pipeline — runs every 6 hours
+    "run-crawl-pipeline-every-6-hours": {
         "task": "app.crawler.tasks.run_crawl_pipeline",
-        "schedule": crontab(minute=0, hour=1),
+        "schedule": crontab(minute=0, hour="*/6"),
     },
     # Discovery queue — probe new company candidates every 6 hours
     "run-discovery-queue-every-6-hours": {
