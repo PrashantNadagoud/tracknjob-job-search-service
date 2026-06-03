@@ -1,11 +1,10 @@
 import os
 
-import brevo_python
-from brevo_python.api import transactional_emails_api
-from brevo_python.models import SendSmtpEmail, SendSmtpEmailSender, SendSmtpEmailTo
 
+def _get_brevo_client():
+    import brevo_python
+    from brevo_python.api import transactional_emails_api
 
-def _get_brevo_client() -> transactional_emails_api.TransactionalEmailsApi:
     configuration = brevo_python.Configuration()
     configuration.api_key["api-key"] = os.getenv("BREVO_API_KEY", "")
     return transactional_emails_api.TransactionalEmailsApi(
@@ -57,6 +56,8 @@ def send_job_alert_email(
         </a>
       </div>
     </div>"""
+
+    from brevo_python.models import SendSmtpEmail, SendSmtpEmailSender, SendSmtpEmailTo
 
     client = _get_brevo_client()
     from_email = os.getenv("BREVO_FROM_EMAIL", "alerts@tracknjob.com")
