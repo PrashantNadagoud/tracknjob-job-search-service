@@ -818,6 +818,7 @@ async def _process_discovery_item(
                 p_ats = await session.get(AtsSource, probe_ats_id)
                 if p_ats:
                     p_ats.is_active = True
+                    p_ats.last_crawled_at = None
                 active_ats_id: uuid.UUID = probe_ats_id
             else:
                 # Canonical company exists: check for existing AtsSource constraint
@@ -837,6 +838,7 @@ async def _process_discovery_item(
                     if p_ats:
                         p_ats.company_id = real_company_id
                         p_ats.is_active = True
+                        p_ats.last_crawled_at = None
                     active_ats_id = probe_ats_id
                 else:
                     # Conflict: canonical company already has (company_id, ats_type)
@@ -846,6 +848,7 @@ async def _process_discovery_item(
                         await session.delete(p_ats)
                     # Activate existing AtsSource if it was dormant
                     existing_ats.is_active = True
+                    existing_ats.last_crawled_at = None
                     active_ats_id = existing_ats.id
 
                 # Delete probe Company — canonical company takes ownership

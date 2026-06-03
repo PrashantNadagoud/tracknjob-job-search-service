@@ -111,6 +111,25 @@ async def seed_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     }
 
 
+@router.post("/reset-source-timers", response_model=None)
+async def reset_source_timers(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    """Reset last_crawled_at and backoff_until for all active ATS sources.
+
+    Makes all sources immediately due for run_crawl_pipeline.
+    Use this to force an immediate crawl without waiting 20 hours.
+    """
+    result = await db.execute(
+        text("""
+            UPDATE jobs.ats_sources
+            SET last_crawled_at = NULL,
+                backoff_until = NULL,
+                consecutive_failures = 0
+            WHERE is_active = TRUE
+        """)
+    )
+    return {"reset_count": result.rowcount}
+
+
 @router.post("/trigger-crawl", response_model=None)
 async def trigger_crawl() -> dict[str, Any]:
     """Enqueue run_crawl_pipeline immediately (does not wait for result)."""
