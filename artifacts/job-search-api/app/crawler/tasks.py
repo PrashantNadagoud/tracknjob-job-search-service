@@ -656,7 +656,10 @@ async def _async_run_crawl_pipeline() -> dict[str, Any]:
     for source_id in source_ids:
         try:
             async with Session() as session:
-                jobs = await dispatcher.dispatch(source_id, session)
+                jobs = await asyncio.wait_for(
+                    dispatcher.dispatch(source_id, session),
+                    timeout=90.0,
+                )
 
             if jobs:
                 new_ids = await _upsert_ats_jobs(jobs, Session)
@@ -664,6 +667,10 @@ async def _async_run_crawl_pipeline() -> dict[str, Any]:
                 total_jobs += len(jobs)
 
             sources_crawled += 1
+        except asyncio.TimeoutError:
+            logger.warning(
+                "run_crawl_pipeline: dispatch timed out (90s) for source_id=%s", source_id
+            )
         except Exception:
             logger.exception("run_crawl_pipeline: unhandled error for source_id=%s", source_id)
 

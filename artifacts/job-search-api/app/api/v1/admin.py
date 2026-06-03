@@ -111,6 +111,25 @@ async def seed_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     }
 
 
+@router.get("/source-states", response_model=None)
+async def source_states(db: AsyncSession = Depends(get_db)) -> list[dict[str, Any]]:
+    """Show last_crawled_at, backoff_until, consecutive_failures for all ATS sources."""
+    result = await db.execute(
+        text("""
+            SELECT id::text, ats_type, ats_slug, is_active,
+                   last_crawled_at, backoff_until,
+                   consecutive_failures, last_crawl_status
+            FROM jobs.ats_sources
+            ORDER BY last_crawled_at ASC NULLS FIRST
+        """)
+    )
+    cols = result.keys()
+    return [
+        {k: (str(v) if v is not None else None) for k, v in zip(cols, row)}
+        for row in result.fetchall()
+    ]
+
+
 @router.post("/reset-source-timers", response_model=None)
 async def reset_source_timers(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     """Reset last_crawled_at and backoff_until for all active ATS sources.
