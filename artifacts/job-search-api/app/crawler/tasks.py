@@ -1049,3 +1049,89 @@ def run_crawl_pipeline() -> dict[str, Any]:  # type: ignore[override]
 def run_discovery_queue() -> dict[str, Any]:  # type: ignore[override]
     """Process pending company discovery queue rows (up to 50 per run)."""
     return asyncio.run(_async_run_discovery_queue())
+
+
+@celery_app.task(name="app.crawler.tasks.seed_startup_sources")
+def seed_startup_sources() -> dict[str, Any]:  # type: ignore[override]
+    """Seed Greenhouse/Lever/SmartRecruiters sources from data/startup_ats_sources.json."""
+    return asyncio.run(_async_seed_startup_sources())
+
+
+async def _async_seed_startup_sources() -> dict[str, Any]:
+    """Insert locally-discovered startup ATS sources into the production DB.
+
+    Reads data/startup_ats_sources.json (exported from local Docker DB after
+    the YC seed + discovery run). Sets is_active=TRUE immediately since these
+    slugs have already been validated locally.
+    """
+    import re as _re
+    from pathlib import Path
+
+    data_file = Path(__file__).resolve().parent.parent.parent / "data" / "startup_ats_sources.json"
+    records: list[dict[str, Any]] = json.loads(data_file.read_text())
+
+    Session = _make_session()
+    inserted = 0
+    skipped = 0
+
+    def _slugify_name(name: str) -> str:
+        s = name.lower()
+        s = _re.sub(r"[^a-z0-9]+", "-", s)
+        return s.strip("-")
+
+    async with Session() as session:
+        for rec in records:
+            company_name: str = rec["company_name"]
+            ats_type: str = rec["ats_type"]
+            ats_slug: str = rec["ats_slug"]
+            market: str = rec.get("market") or "US"
+            crawl_config = rec.get("crawl_config") or {}
+            company_slug = _slugify_name(company_name)
+
+            company_row = (await session.execute(
+                text("""
+                    INSERT INTO jobs.companies (slug, name)
+                    VALUES (:slug, :name)
+                    ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
+                    RETURNING id
+                """),
+                {"slug": company_slug, "name": company_name},
+            )).fetchone()
+            company_id = company_row[0]
+
+            existing = (await session.execute(
+                text("""
+                    SELECT id FROM jobs.ats_sources
+                    WHERE ats_type = :ats_type AND ats_slug = :ats_slug
+                """),
+                {"ats_type": ats_type, "ats_slug": ats_slug},
+            )).fetchone()
+
+            if existing:
+                skipped += 1
+                continue
+
+            await session.execute(
+                text("""
+                    INSERT INTO jobs.ats_sources
+                        (company_id, ats_type, ats_slug, market, crawl_config,
+                         is_active, last_crawled_at, discovery_source)
+                    VALUES
+                        (:company_id, :ats_type, :ats_slug, :market,
+                         CAST(:crawl_config AS jsonb),
+                         TRUE, NULL, 'yc_seed_export')
+                """),
+                {
+                    "company_id": company_id,
+                    "ats_type": ats_type,
+                    "ats_slug": ats_slug,
+                    "market": market,
+                    "crawl_config": json.dumps(crawl_config),
+                },
+            )
+            inserted += 1
+
+        await session.commit()
+
+    logger.info("seed_startup_sources: inserted=%d skipped=%d", inserted, skipped)
+    return {"inserted": inserted, "skipped": skipped}

@@ -165,3 +165,12 @@ async def trigger_discovery() -> dict[str, Any]:
 
     result = celery_app.send_task("app.crawler.tasks.run_discovery_queue")
     return {"status": "queued", "task_id": result.id}
+
+
+@router.post("/seed-startup-sources", response_model=None)
+async def seed_startup_sources() -> dict[str, Any]:
+    """Seed Greenhouse/Lever/SmartRecruiters sources from locally-discovered YC data."""
+    from app.celery_app import celery_app
+
+    result = celery_app.send_task("app.crawler.tasks.seed_startup_sources")
+    return {"status": "queued", "task_id": result.id}
