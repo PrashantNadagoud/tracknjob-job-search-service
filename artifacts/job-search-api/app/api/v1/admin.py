@@ -1,7 +1,9 @@
 """Admin API — internal-use endpoints, authentication required.
 
 Endpoints:
-    GET /seed-status   — aggregate counts for discovery queue, ATS sources, listings.
+    GET  /seed-status        — aggregate counts for discovery queue, ATS sources, listings.
+    POST /trigger-crawl      — enqueue run_crawl_pipeline immediately.
+    POST /trigger-discovery  — enqueue run_discovery_queue immediately.
 """
 
 from __future__ import annotations
@@ -107,3 +109,21 @@ async def seed_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
         "last_crawl_run": last_crawl_row.isoformat() if last_crawl_row else None,
         "total_active_listings": int(total_active_row or 0),
     }
+
+
+@router.post("/trigger-crawl", response_model=None)
+async def trigger_crawl() -> dict[str, Any]:
+    """Enqueue run_crawl_pipeline immediately (does not wait for result)."""
+    from app.celery_app import celery_app
+
+    result = celery_app.send_task("app.crawler.tasks.run_crawl_pipeline")
+    return {"status": "queued", "task_id": result.id}
+
+
+@router.post("/trigger-discovery", response_model=None)
+async def trigger_discovery() -> dict[str, Any]:
+    """Enqueue run_discovery_queue immediately (does not wait for result)."""
+    from app.celery_app import celery_app
+
+    result = celery_app.send_task("app.crawler.tasks.run_discovery_queue")
+    return {"status": "queued", "task_id": result.id}
