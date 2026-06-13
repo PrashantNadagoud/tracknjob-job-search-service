@@ -47,6 +47,11 @@ beat_schedule = {
         "task": "app.alert_tasks.prune_old_deliveries",
         "schedule": crontab(minute=30, hour=4),
     },
+    # YC discovery — fetch full YC company list weekly and queue new companies for probing
+    "seed-yc-discovery-weekly": {
+        "task": "app.crawler.tasks.seed_yc_discovery",
+        "schedule": crontab(minute=0, hour=1, day_of_week="sunday"),
+    },
 }
 
 # Note: crawl_all_companies is retained as a fallback / manually-triggered task

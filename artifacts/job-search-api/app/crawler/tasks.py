@@ -1237,3 +1237,99 @@ async def _async_seed_india_sources() -> dict[str, Any]:
         inserted, skipped, deactivated,
     )
     return {"inserted": inserted, "skipped": skipped, "deactivated_aggregators": deactivated}
+
+
+@celery_app.task(name="app.crawler.tasks.seed_yc_discovery")
+def seed_yc_discovery() -> dict[str, Any]:  # type: ignore[override]
+    """Fetch all YC companies and queue new ones for ATS discovery."""
+    return asyncio.run(_async_seed_yc_discovery())
+
+
+async def _async_seed_yc_discovery() -> dict[str, Any]:
+    """Fetch the full YC company directory and insert unknown companies into
+    company_discovery_queue as 'pending' so run_discovery_queue can probe them.
+
+    Skips companies whose website is already in jobs.companies or
+    jobs.company_discovery_queue (any status). Deduplication is by normalized
+    website URL so re-running is safe (idempotent).
+    """
+    import re as _re
+    from app.discovery.yc_scraper import YCScraper
+
+    Session = _make_session()
+    scraper = YCScraper()
+
+    logger.info("seed_yc_discovery: fetching YC company list...")
+    companies = await scraper.fetch(max_pages=100)
+    logger.info("seed_yc_discovery: fetched %d companies from YC", len(companies))
+
+    async with Session() as session:
+        # Build set of already-known websites
+        existing_rows = (await session.execute(
+            text("SELECT website FROM jobs.companies WHERE website IS NOT NULL")
+        )).fetchall()
+        queued_rows = (await session.execute(
+            text("SELECT website FROM jobs.company_discovery_queue WHERE website IS NOT NULL")
+        )).fetchall()
+
+    known_websites: set[str] = set()
+    for (w,) in existing_rows:
+        if w:
+            known_websites.add(w.rstrip("/"))
+    for (w,) in queued_rows:
+        if w:
+            known_websites.add(w.rstrip("/"))
+
+    def _slugify(name: str) -> str:
+        s = name.lower()
+        s = _re.sub(r"[^\w\s-]", "", s)
+        s = _re.sub(r"[\s_]+", "-", s)
+        s = _re.sub(r"-+", "-", s)
+        return s.strip("-")
+
+    candidates = [
+        c for c in companies
+        if c.get("website") and c["website"].rstrip("/") not in known_websites
+    ]
+    logger.info(
+        "seed_yc_discovery: %d already known, %d new candidates to queue",
+        len(companies) - len(candidates), len(candidates),
+    )
+
+    inserted = 0
+    skipped = 0
+    batch_size = 200
+
+    async with Session() as session:
+        for i in range(0, len(candidates), batch_size):
+            batch = candidates[i: i + batch_size]
+            for company in batch:
+                name: str = company.get("name") or ""
+                website: str = (company.get("website") or "").rstrip("/")
+                if not website:
+                    skipped += 1
+                    continue
+
+                await session.execute(
+                    text("""
+                        INSERT INTO jobs.company_discovery_queue
+                            (company_name, website, source, market, status)
+                        VALUES
+                            (:name, :website, 'yc_directory', 'US', 'pending')
+                        ON CONFLICT DO NOTHING
+                    """),
+                    {"name": name, "website": website},
+                )
+                inserted += 1
+
+            await session.commit()
+            logger.info(
+                "seed_yc_discovery: queued %d / %d companies so far",
+                min(i + batch_size, len(candidates)), len(candidates),
+            )
+
+    logger.info(
+        "seed_yc_discovery: done — queued=%d skipped=%d total_yc=%d",
+        inserted, skipped, len(companies),
+    )
+    return {"queued": inserted, "skipped": skipped, "total_yc": len(companies)}
