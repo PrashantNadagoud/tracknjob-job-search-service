@@ -43,7 +43,7 @@ class NaukriCrawler(BaseATSCrawler):
         page = 1
 
         while True:
-            data = await self._get_json(
+            data = await self._get_json_proxied(
                 _API_URL,
                 params={
                     "noOfResults": _PAGE_SIZE,
