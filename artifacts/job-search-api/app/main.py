@@ -49,11 +49,16 @@ async def _load_geonames_background() -> None:
 
 
 async def _maybe_seed_sources() -> None:
-    """If no active ATS sources exist, enqueue seed + crawl tasks automatically.
+    """If no active ATS sources exist, seed directly then enqueue a crawl.
 
     Runs once at startup so Railway deploys are self-seeding without any
-    manual admin API calls.
+    manual admin API calls. Seeds the DB inline (no Celery dependency) so
+    it works even if the worker container hasn't started yet.
     """
+    import json as _json
+    import re as _re
+    from pathlib import Path
+
     try:
         async with AsyncSessionFactory() as session:
             count = (
@@ -65,15 +70,86 @@ async def _maybe_seed_sources() -> None:
                 )
             ).scalar()
 
-        if not count:
-            logger.info("No active ATS sources found — enqueueing seed_startup_sources + run_crawl_pipeline")
-            from app.celery_app import celery_app as _celery
-            _celery.send_task("app.crawler.tasks.seed_startup_sources")
-            _celery.send_task("app.crawler.tasks.run_crawl_pipeline", countdown=60)
-        else:
-            logger.info("Active ATS sources found (%d) — skipping auto-seed", count)
+        if count:
+            logger.info("Auto-seed: %d active ATS sources already present — skipping", count)
+            return
+
+        logger.info("Auto-seed: no active ATS sources found — seeding from startup_ats_sources.json")
+
+        data_file = Path(__file__).resolve().parent.parent / "data" / "startup_ats_sources.json"
+        if not data_file.exists():
+            logger.warning("Auto-seed: data file not found at %s — skipping", data_file)
+            return
+
+        records: list[dict] = _json.loads(data_file.read_text())
+
+        def _slugify(name: str) -> str:
+            s = name.lower()
+            s = _re.sub(r"[^a-z0-9]+", "-", s)
+            return s.strip("-")
+
+        inserted = 0
+        skipped = 0
+        async with AsyncSessionFactory() as session:
+            for rec in records:
+                company_name: str = rec["company_name"]
+                ats_type: str = rec["ats_type"]
+                ats_slug: str = rec["ats_slug"]
+                market: str = rec.get("market") or "US"
+                crawl_config = rec.get("crawl_config") or {}
+                company_slug = _slugify(company_name)
+
+                company_row = (await session.execute(
+                    text("""
+                        INSERT INTO jobs.companies (slug, name)
+                        VALUES (:slug, :name)
+                        ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
+                        RETURNING id
+                    """),
+                    {"slug": company_slug, "name": company_name},
+                )).fetchone()
+                company_id = company_row[0]
+
+                existing = (await session.execute(
+                    text("""
+                        SELECT id FROM jobs.ats_sources
+                        WHERE ats_type = :ats_type AND ats_slug = :ats_slug
+                    """),
+                    {"ats_type": ats_type, "ats_slug": ats_slug},
+                )).fetchone()
+
+                if existing:
+                    skipped += 1
+                    continue
+
+                await session.execute(
+                    text("""
+                        INSERT INTO jobs.ats_sources
+                            (company_id, ats_type, ats_slug, market, crawl_config,
+                             is_active, last_crawled_at, discovery_source)
+                        VALUES
+                            (:company_id, :ats_type, :ats_slug, :market,
+                             CAST(:crawl_config AS jsonb),
+                             TRUE, NULL, 'yc_seed_export')
+                    """),
+                    {
+                        "company_id": company_id,
+                        "ats_type": ats_type,
+                        "ats_slug": ats_slug,
+                        "market": market,
+                        "crawl_config": _json.dumps(crawl_config),
+                    },
+                )
+                inserted += 1
+
+            await session.commit()
+
+        logger.info("Auto-seed: inserted=%d skipped=%d — enqueueing crawl pipeline", inserted, skipped)
+        from app.celery_app import celery_app as _celery
+        _celery.send_task("app.crawler.tasks.run_crawl_pipeline", countdown=5)
+
     except Exception:
-        logger.warning("Auto-seed check failed — will rely on beat schedule", exc_info=True)
+        logger.warning("Auto-seed failed — crawl will run on next beat schedule", exc_info=True)
 
 
 @asynccontextmanager
