@@ -48,10 +48,39 @@ async def _load_geonames_background() -> None:
         )
 
 
+async def _maybe_seed_sources() -> None:
+    """If no active ATS sources exist, enqueue seed + crawl tasks automatically.
+
+    Runs once at startup so Railway deploys are self-seeding without any
+    manual admin API calls.
+    """
+    try:
+        async with AsyncSessionFactory() as session:
+            count = (
+                await asyncio.wait_for(
+                    session.execute(
+                        text("SELECT COUNT(*) FROM jobs.ats_sources WHERE is_active = TRUE")
+                    ),
+                    timeout=10.0,
+                )
+            ).scalar()
+
+        if not count:
+            logger.info("No active ATS sources found — enqueueing seed_startup_sources + run_crawl_pipeline")
+            from app.celery_app import celery_app as _celery
+            _celery.send_task("app.crawler.tasks.seed_startup_sources")
+            _celery.send_task("app.crawler.tasks.run_crawl_pipeline", countdown=60)
+        else:
+            logger.info("Active ATS sources found (%d) — skipping auto-seed", count)
+    except Exception:
+        logger.warning("Auto-seed check failed — will rely on beat schedule", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start background tasks after server is ready to serve requests."""
     asyncio.create_task(_load_geonames_background())
+    asyncio.create_task(_maybe_seed_sources())
     yield
 
 
