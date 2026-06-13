@@ -36,7 +36,7 @@ class FounditCrawler(BaseATSCrawler):
         page = 0
 
         while True:
-            data = await self._get_json_proxied(
+            data = await self._get_json(
                 _API_URL,
                 params={"query": ats_slug, "limit": _PAGE_SIZE, "page": page},
             )

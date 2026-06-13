@@ -13,7 +13,6 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     ADMIN_USER_ID: str = ""
     CRUNCHBASE_API_KEY: str = ""
-    SCRAPERAPI_KEY: str = ""
     BREVO_API_KEY: str = ""
     BREVO_FROM_EMAIL: str = "alerts@tracknjob.com"
     BREVO_FROM_NAME: str = "TrackNJob Alerts"

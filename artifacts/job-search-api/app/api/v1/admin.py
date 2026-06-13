@@ -174,3 +174,12 @@ async def seed_startup_sources() -> dict[str, Any]:
 
     result = celery_app.send_task("app.crawler.tasks.seed_startup_sources")
     return {"status": "queued", "task_id": result.id}
+
+
+@router.post("/seed-india-sources", response_model=None)
+async def seed_india_sources() -> dict[str, Any]:
+    """Seed verified India company ATS sources and deactivate Naukri/Foundit aggregators."""
+    from app.celery_app import celery_app
+
+    result = celery_app.send_task("app.crawler.tasks.seed_india_sources")
+    return {"status": "queued", "task_id": result.id}

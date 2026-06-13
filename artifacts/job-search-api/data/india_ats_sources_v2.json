@@ -1,0 +1,23 @@
+[
+  {"company_name": "Postman", "ats_type": "greenhouse", "ats_slug": "postman", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "PhonePe", "ats_type": "greenhouse", "ats_slug": "phonepe", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Groww", "ats_type": "greenhouse", "ats_slug": "groww", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Slice", "ats_type": "greenhouse", "ats_slug": "slice", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Razorpay", "ats_type": "greenhouse", "ats_slug": "razorpaysoftwareprivatelimited", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Twilio", "ats_type": "greenhouse", "ats_slug": "twilio", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Cloudflare", "ats_type": "greenhouse", "ats_slug": "cloudflare", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Databricks", "ats_type": "greenhouse", "ats_slug": "databricks", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Rubrik", "ats_type": "greenhouse", "ats_slug": "rubrik", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Zscaler", "ats_type": "greenhouse", "ats_slug": "zscaler", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Okta", "ats_type": "greenhouse", "ats_slug": "okta", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Druva", "ats_type": "greenhouse", "ats_slug": "druva", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Elastic", "ats_type": "greenhouse", "ats_slug": "elastic", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "LaunchDarkly", "ats_type": "greenhouse", "ats_slug": "launchdarkly", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "InMobi", "ats_type": "greenhouse", "ats_slug": "inmobi", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Meesho", "ats_type": "lever", "ats_slug": "meesho", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "CRED", "ats_type": "lever", "ats_slug": "cred", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Porter", "ats_type": "lever", "ats_slug": "porter", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Fi Money", "ats_type": "lever", "ats_slug": "epifi", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Navi", "ats_type": "ashby", "ats_slug": "navi", "market": "IN", "career_site_url": null, "crawl_config": {}},
+  {"company_name": "Freshworks", "ats_type": "smartrecruiters", "ats_slug": "Freshworks", "market": "IN", "career_site_url": null, "crawl_config": {}}
+]

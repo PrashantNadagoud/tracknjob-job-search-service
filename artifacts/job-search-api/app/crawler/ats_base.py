@@ -97,52 +97,6 @@ class BaseATSCrawler(ABC):
         except Exception as exc:
             raise CrawlException(f"Unexpected error posting to {url}: {exc}") from exc
 
-    async def _get_json_proxied(
-        self,
-        url: str,
-        params: dict | None = None,
-        extra_headers: dict | None = None,
-    ) -> Any:
-        """GET via ScraperAPI proxy if SCRAPERAPI_KEY is set, else fall back to direct.
-
-        ScraperAPI routes through residential IPs and handles retries internally,
-        bypassing WAF/IP blocks on sites like Naukri and Foundit.
-        The proxy URL format is:
-            http://api.scraperapi.com/?api_key=KEY&url=<encoded_target>
-        """
-        from app.config import get_settings
-        import urllib.parse
-
-        api_key = get_settings().SCRAPERAPI_KEY
-        if not api_key:
-            return await self._get_json(url, params=params, extra_headers=extra_headers)
-
-        if params:
-            target_url = url + "?" + urllib.parse.urlencode(params)
-        else:
-            target_url = url
-
-        proxy_url = (
-            f"http://api.scraperapi.com/?api_key={api_key}"
-            f"&url={urllib.parse.quote(target_url, safe='')}"
-        )
-
-        headers = {**_BOT_HEADERS, **(extra_headers or {})}
-        try:
-            async with httpx.AsyncClient(
-                timeout=60, follow_redirects=True, headers=headers
-            ) as client:
-                resp = await client.get(proxy_url)
-                if not resp.is_success:
-                    self._map_http_error(resp.status_code, target_url)
-                return resp.json()
-        except (RateLimitedException, SlugNotFoundException, CrawlException):
-            raise
-        except httpx.TimeoutException as exc:
-            raise CrawlException(f"Proxy timeout fetching {target_url}") from exc
-        except Exception as exc:
-            raise CrawlException(f"Proxy error fetching {target_url}: {exc}") from exc
-
     async def _get_rendered_text(self, url: str) -> str:
         """Fetch page content via Playwright headless Chromium.
 
