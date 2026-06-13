@@ -64,14 +64,18 @@ async def _maybe_seed_sources() -> None:
             count = (
                 await asyncio.wait_for(
                     session.execute(
-                        text("SELECT COUNT(*) FROM jobs.ats_sources WHERE is_active = TRUE")
+                        text("""
+                            SELECT COUNT(*) FROM jobs.ats_sources
+                            WHERE is_active = TRUE
+                              AND ats_type IN ('greenhouse', 'lever', 'smartrecruiters')
+                        """)
                     ),
                     timeout=10.0,
                 )
             ).scalar()
 
         if count:
-            logger.info("Auto-seed: %d active ATS sources already present — skipping", count)
+            logger.info("Auto-seed: %d greenhouse/lever/smartrecruiters sources already present — skipping", count)
             return
 
         logger.info("Auto-seed: no active ATS sources found — seeding from startup_ats_sources.json")
