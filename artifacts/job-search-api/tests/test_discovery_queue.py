@@ -229,7 +229,7 @@ class TestProcessDiscoveryItem:
             fingerprint_calls.append(website)
             return None  # fingerprint misses, fall through to prober
 
-        async def mock_probe(self, company_dict):
+        async def mock_probe(self, company_dict, **kwargs):
             prober_calls.append(company_dict.get("name"))
             return None
 
@@ -272,7 +272,7 @@ class TestProcessDiscoveryItem:
         fingerprint_result = {"ats_type": "greenhouse", "ats_slug": "acme"}
         prober_calls: list = []
 
-        async def mock_probe(self, company_dict):
+        async def mock_probe(self, company_dict, **kwargs):
             prober_calls.append(company_dict)
             return None
 

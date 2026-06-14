@@ -566,11 +566,17 @@ class ATSProber:
                 return result
         return None
 
-    async def probe(self, company: dict[str, Any]) -> dict[str, Any] | None:
+    async def probe(
+        self,
+        company: dict[str, Any],
+        skip_ats: frozenset[str] | None = None,
+    ) -> dict[str, Any] | None:
         """Return first matching ATS dict or None.
 
         Args:
-            company: dict with keys name, website, yc_slug (any may be None).
+            company:  dict with keys name, website, yc_slug (any may be None).
+            skip_ats: optional set of ats_type strings to skip entirely, e.g.
+                      frozenset({"workday"}) for YC companies that never use it.
 
         Returns:
             {"ats_type": str, "ats_slug": str, "crawl_url": str} or None.
@@ -580,6 +586,7 @@ class ATSProber:
             logger.debug("Could not derive slug for company: %s", company.get("name"))
             return None
 
+        skip_ats = skip_ats or frozenset()
         company_sem = asyncio.Semaphore(5)
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -595,6 +602,8 @@ class ATSProber:
         ) as client:
             tasks = []
             for pattern in ATS_PROBE_PATTERNS:
+                if pattern["ats_type"] in skip_ats:
+                    continue
                 if pattern["ats_type"] == "workday":
                     tasks.append(self._probe_workday(client, slug, company_sem))
                 else:
