@@ -1,12 +1,12 @@
 """Tests for the discovery queue processor (_process_discovery_item).
 
-All DB and dispatcher calls are mocked so no real network or DB access occurs.
+All DB and network calls are mocked so no real network or DB access occurs.
 Focus areas:
-- Dispatcher is called with the probe AtsSource ID (not raw crawler)
-- Company + AtsSource created ONLY on successful probe
-- Probe entities activated and renamed on success
-- Attempt count incremented on failure
-- Rejection at >= 3 attempts deletes probe entities
+- ATSProber.probe() is called (not CrawlDispatcher)
+- detect_ats_from_careers_page() is tried first (stage 1)
+- Company + AtsSource created ONLY on a confirmed ATS match
+- Item marked 'resolved' on match, 'rejected' on no match
+- Items with status != 'pending' are skipped
 """
 
 import uuid
@@ -22,8 +22,8 @@ def _make_queue_item(
     *,
     status: str = "pending",
     attempt_count: int = 0,
-    suspected_ats: str = "workday",
-    suspected_slug: str = "acme",
+    suspected_ats: str | None = None,
+    suspected_slug: str | None = None,
     company_name: str = "Acme Corp",
     market: str = "US",
 ):
@@ -40,21 +40,26 @@ def _make_queue_item(
     return item
 
 
-def _make_probe_company(company_name: str = "Acme Corp") -> MagicMock:
+def _make_company(company_name: str = "Acme Corp", slug: str | None = None) -> MagicMock:
     co = MagicMock(spec=Company)
     co.id = uuid.uuid4()
-    co.slug = company_name.lower() + "-probe"
+    co.slug = slug or company_name.lower().replace(" ", "-")
     co.name = company_name
     return co
 
 
-def _make_probe_ats(company_id: uuid.UUID, ats_type: str = "workday") -> MagicMock:
+def _make_ats_source(company_id: uuid.UUID, ats_type: str = "greenhouse") -> MagicMock:
     ats = MagicMock(spec=AtsSource)
     ats.id = uuid.uuid4()
     ats.company_id = company_id
     ats.ats_type = ats_type
-    ats.is_active = False
+    ats.is_active = True
     return ats
+
+
+# Keep old names as aliases so unchanged tests continue to work
+_make_probe_company = _make_company
+_make_probe_ats = _make_ats_source
 
 
 class TestProcessDiscoveryItem:
@@ -98,21 +103,15 @@ class TestProcessDiscoveryItem:
         assert result == "skipped"
 
     @pytest.mark.asyncio
-    async def test_success_via_dispatcher_returns_resolved(self):
-        """A successful probe returns 'resolved'."""
+    async def test_success_via_ats_prober_returns_resolved(self):
+        """ATSProber returning a match results in 'resolved'."""
         from app.crawler.tasks import _process_discovery_item
 
         item = _make_queue_item()
-        probe_company = _make_probe_company()
-        probe_ats = _make_probe_ats(probe_company.id)
         item_id = item.id
 
-        dummy_jobs = [
-            {"title": "SWE", "source_url": "http://example.com/1", "company": "Acme Corp"}
-        ]
+        probe_match = {"ats_type": "greenhouse", "ats_slug": "acme-corp", "crawl_url": None}
 
-        # Session sequence: step1 (get item, probe company, probe ats),
-        # step2 (dispatch), step3 (promote), step4 (upsert_ats_jobs)
         call_count = 0
 
         def session_factory():
@@ -120,33 +119,19 @@ class TestProcessDiscoveryItem:
             s = AsyncMock()
 
             if call_count == 0:
-                # Step 1: read item + get/create probe entities
-                execute_result_item = MagicMock()
-                execute_result_item.scalar_one_or_none = MagicMock(
-                    side_effect=[probe_company, probe_ats]
-                )
-                s.execute = AsyncMock(return_value=execute_result_item)
+                # Step 1: read item, mark attempted
                 s.get = AsyncMock(return_value=item)
-            elif call_count == 1:
-                # Step 2: dispatch — dispatcher looks up probe ats
-                s.get = AsyncMock(return_value=probe_ats)
-                execute_result = MagicMock()
-                execute_result.scalar_one_or_none = MagicMock(return_value=probe_company)
-                s.execute = AsyncMock(return_value=execute_result)
-            elif call_count == 2:
-                # Step 3: promote — look up real company (not found), rename probe
+            else:
+                # Step 2: write match — no existing company, no existing ats
                 execute_result = MagicMock()
                 execute_result.scalar_one_or_none = MagicMock(return_value=None)
                 s.execute = AsyncMock(return_value=execute_result)
+                new_company = _make_company()
+                s.flush = AsyncMock()
+                s.add = MagicMock()
                 q_item_copy = MagicMock(spec=CompanyDiscoveryQueue)
                 q_item_copy.status = "pending"
-                s.get = AsyncMock(side_effect=[probe_company, probe_ats, q_item_copy])
-            else:
-                # Step 4+: upsert
-                execute_result = MagicMock()
-                execute_result.scalar_one_or_none = MagicMock(return_value=None)
-                s.execute = AsyncMock(return_value=execute_result)
-                s.get = AsyncMock(return_value=None)
+                s.get = AsyncMock(return_value=q_item_copy)
 
             call_count += 1
             s.__aenter__ = AsyncMock(return_value=s)
@@ -155,25 +140,18 @@ class TestProcessDiscoveryItem:
 
         mock_session_maker = MagicMock(side_effect=session_factory)
 
-        with patch(
-            "app.crawler.dispatcher.CrawlDispatcher",
-            return_value=MagicMock(
-                dispatch=AsyncMock(return_value=dummy_jobs)
-            ),
-        ):
-            with patch("app.crawler.tasks._upsert_ats_jobs", new=AsyncMock(return_value=[])):
+        with patch("app.discovery.ats_prober.detect_ats_from_careers_page", new=AsyncMock(return_value=None)):
+            with patch("app.discovery.ats_prober.ATSProber.probe", new=AsyncMock(return_value=probe_match)):
                 result = await _process_discovery_item(item_id, mock_session_maker)
 
         assert result == "resolved"
 
     @pytest.mark.asyncio
-    async def test_failure_increments_attempt_count(self):
-        """A failed probe (no jobs returned) increments attempt_count."""
+    async def test_no_match_returns_rejected(self):
+        """When both fingerprinting and ATSProber find nothing, item is 'rejected'."""
         from app.crawler.tasks import _process_discovery_item
 
         item = _make_queue_item(attempt_count=0)
-        probe_company = _make_probe_company()
-        probe_ats = _make_probe_ats(probe_company.id)
         item_id = item.id
 
         q_item_mutable = MagicMock(spec=CompanyDiscoveryQueue)
@@ -187,22 +165,9 @@ class TestProcessDiscoveryItem:
             s = AsyncMock()
 
             if call_count == 0:
-                execute_result = MagicMock()
-                execute_result.scalar_one_or_none = MagicMock(
-                    side_effect=[probe_company, probe_ats]
-                )
-                s.execute = AsyncMock(return_value=execute_result)
                 s.get = AsyncMock(return_value=item)
-            elif call_count == 1:
-                # dispatch session
-                s.get = AsyncMock(return_value=probe_ats)
-                execute_result = MagicMock()
-                execute_result.scalar_one_or_none = MagicMock(return_value=probe_company)
-                s.execute = AsyncMock(return_value=execute_result)
             else:
-                # Step 3: update queue item
                 s.get = AsyncMock(return_value=q_item_mutable)
-                s.execute = AsyncMock()
 
             call_count += 1
             s.__aenter__ = AsyncMock(return_value=s)
@@ -211,60 +176,30 @@ class TestProcessDiscoveryItem:
 
         mock_session_maker = MagicMock(side_effect=session_factory)
 
-        with patch(
-            "app.crawler.dispatcher.CrawlDispatcher",
-            return_value=MagicMock(dispatch=AsyncMock(return_value=[])),
-        ):
-            result = await _process_discovery_item(item_id, mock_session_maker)
+        with patch("app.discovery.ats_prober.detect_ats_from_careers_page", new=AsyncMock(return_value=None)):
+            with patch("app.discovery.ats_prober.ATSProber.probe", new=AsyncMock(return_value=None)):
+                result = await _process_discovery_item(item_id, mock_session_maker)
 
-        assert result == "failed"
-        assert q_item_mutable.attempt_count == 1
+        assert result == "rejected"
 
     @pytest.mark.asyncio
-    async def test_rejection_at_3_attempts_deletes_probe_entities(self):
-        """At >= 3 attempts with no jobs, status='rejected' and probe rows deleted."""
+    async def test_no_match_marks_queue_item_rejected(self):
+        """When no ATS is found, queue item status is set to 'rejected'."""
         from app.crawler.tasks import _process_discovery_item
 
-        item = _make_queue_item(attempt_count=2)  # this run is the 3rd
-        probe_company = _make_probe_company()
-        probe_ats = _make_probe_ats(probe_company.id)
+        item = _make_queue_item(attempt_count=0)
         item_id = item.id
 
         q_item_mutable = MagicMock(spec=CompanyDiscoveryQueue)
         q_item_mutable.status = "pending"
-        q_item_mutable.attempt_count = 2
-        deleted_objects: list = []
+        q_item_mutable.attempt_count = 0
 
         call_count = 0
 
         def session_factory():
             nonlocal call_count
             s = AsyncMock()
-
-            async def _delete(obj):
-                deleted_objects.append(obj)
-
-            s.delete = _delete
-
-            if call_count == 0:
-                execute_result = MagicMock()
-                execute_result.scalar_one_or_none = MagicMock(
-                    side_effect=[probe_company, probe_ats]
-                )
-                s.execute = AsyncMock(return_value=execute_result)
-                s.get = AsyncMock(return_value=item)
-            elif call_count == 1:
-                s.get = AsyncMock(return_value=probe_ats)
-                execute_result = MagicMock()
-                execute_result.scalar_one_or_none = MagicMock(return_value=probe_company)
-                s.execute = AsyncMock(return_value=execute_result)
-            else:
-                # Rejection session: get queue item, probe ats, probe company by slug
-                execute_result = MagicMock()
-                execute_result.scalar_one_or_none = MagicMock(return_value=probe_company)
-                s.execute = AsyncMock(return_value=execute_result)
-                s.get = AsyncMock(side_effect=[q_item_mutable, probe_ats])
-
+            s.get = AsyncMock(return_value=item if call_count == 0 else q_item_mutable)
             call_count += 1
             s.__aenter__ = AsyncMock(return_value=s)
             s.__aexit__ = AsyncMock(return_value=None)
@@ -272,33 +207,31 @@ class TestProcessDiscoveryItem:
 
         mock_session_maker = MagicMock(side_effect=session_factory)
 
-        with patch(
-            "app.crawler.dispatcher.CrawlDispatcher",
-            return_value=MagicMock(dispatch=AsyncMock(return_value=[])),
-        ):
-            result = await _process_discovery_item(item_id, mock_session_maker)
+        with patch("app.discovery.ats_prober.detect_ats_from_careers_page", new=AsyncMock(return_value=None)):
+            with patch("app.discovery.ats_prober.ATSProber.probe", new=AsyncMock(return_value=None)):
+                result = await _process_discovery_item(item_id, mock_session_maker)
 
         assert result == "rejected"
         assert q_item_mutable.status == "rejected"
-        assert q_item_mutable.attempt_count == 3
-        # Probe entities were passed to session.delete()
-        assert len(deleted_objects) >= 1
 
     @pytest.mark.asyncio
-    async def test_dispatcher_is_called_with_probe_ats_source_id(self):
-        """CrawlDispatcher.dispatch() is called (not raw CRAWLER_MAP)."""
+    async def test_fingerprint_stage_tried_before_ats_prober(self):
+        """detect_ats_from_careers_page is called as stage 1 before ATSProber."""
         from app.crawler.tasks import _process_discovery_item
 
         item = _make_queue_item()
-        probe_company = _make_probe_company()
-        probe_ats = _make_probe_ats(probe_company.id)
         item_id = item.id
 
-        dispatched_ids: list[uuid.UUID] = []
+        fingerprint_calls: list[str] = []
+        prober_calls: list[str] = []
 
-        async def mock_dispatch(ats_source_id, db):
-            dispatched_ids.append(ats_source_id)
-            return []
+        async def mock_fingerprint(website):
+            fingerprint_calls.append(website)
+            return None  # fingerprint misses, fall through to prober
+
+        async def mock_probe(self, company_dict):
+            prober_calls.append(company_dict.get("name"))
+            return None
 
         call_count = 0
 
@@ -306,22 +239,11 @@ class TestProcessDiscoveryItem:
             nonlocal call_count
             s = AsyncMock()
             if call_count == 0:
-                execute_result = MagicMock()
-                execute_result.scalar_one_or_none = MagicMock(
-                    side_effect=[probe_company, probe_ats]
-                )
-                s.execute = AsyncMock(return_value=execute_result)
                 s.get = AsyncMock(return_value=item)
-            elif call_count == 1:
-                s.get = AsyncMock(return_value=probe_ats)
-                execute_result = MagicMock()
-                execute_result.scalar_one_or_none = MagicMock(return_value=probe_company)
-                s.execute = AsyncMock(return_value=execute_result)
             else:
                 q_item_m = MagicMock(spec=CompanyDiscoveryQueue)
-                q_item_m.attempt_count = 0
+                q_item_m.status = "pending"
                 s.get = AsyncMock(return_value=q_item_m)
-                s.execute = AsyncMock()
             call_count += 1
             s.__aenter__ = AsyncMock(return_value=s)
             s.__aexit__ = AsyncMock(return_value=None)
@@ -329,85 +251,47 @@ class TestProcessDiscoveryItem:
 
         mock_session_maker = MagicMock(side_effect=session_factory)
 
-        with patch(
-            "app.crawler.dispatcher.CrawlDispatcher",
-            return_value=MagicMock(dispatch=AsyncMock(side_effect=mock_dispatch)),
-        ):
-            await _process_discovery_item(item_id, mock_session_maker)
+        with patch("app.discovery.ats_prober.detect_ats_from_careers_page", new=mock_fingerprint):
+            with patch("app.discovery.ats_prober.ATSProber.probe", new=mock_probe):
+                await _process_discovery_item(item_id, mock_session_maker)
 
-        # Dispatcher must have been called with the probe AtsSource's ID
-        assert len(dispatched_ids) == 1
-        assert dispatched_ids[0] == probe_ats.id
+        # Stage 1 fingerprint was called with the company website
+        assert len(fingerprint_calls) == 1
+        assert "acme.example.com" in fingerprint_calls[0]
+        # Stage 2 prober was called as fallback
+        assert len(prober_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_success_with_existing_company_and_ats_merges_probe(self):
-        """When canonical company already has an AtsSource for the same ats_type,
-        probe AtsSource is deleted and the existing one is used (no uq_ats_source violation)."""
+    async def test_fingerprint_match_skips_ats_prober(self):
+        """When stage-1 fingerprinting succeeds, ATSProber.probe() is NOT called."""
         from app.crawler.tasks import _process_discovery_item
 
         item = _make_queue_item()
-        probe_company = _make_probe_company()
-        probe_ats = _make_probe_ats(probe_company.id)
         item_id = item.id
 
-        # Canonical company already exists with an AtsSource for 'workday'
-        canonical_company = MagicMock(spec=Company)
-        canonical_company.id = uuid.uuid4()
-        canonical_company.slug = "acme-corp"
+        fingerprint_result = {"ats_type": "greenhouse", "ats_slug": "acme"}
+        prober_calls: list = []
 
-        existing_canonical_ats = MagicMock(spec=AtsSource)
-        existing_canonical_ats.id = uuid.uuid4()
-        existing_canonical_ats.company_id = canonical_company.id
-        existing_canonical_ats.ats_type = "workday"
-        existing_canonical_ats.is_active = False
-
-        dummy_jobs = [{"title": "SWE", "source_url": "http://example.com/1"}]
-        deleted_objects: list = []
+        async def mock_probe(self, company_dict):
+            prober_calls.append(company_dict)
+            return None
 
         call_count = 0
 
         def session_factory():
             nonlocal call_count
             s = AsyncMock()
-
-            async def _delete(obj):
-                deleted_objects.append(obj)
-
-            s.delete = _delete
-
             if call_count == 0:
-                # Step 1: item + probe entities
-                execute_result = MagicMock()
-                execute_result.scalar_one_or_none = MagicMock(
-                    side_effect=[probe_company, probe_ats]
-                )
-                s.execute = AsyncMock(return_value=execute_result)
                 s.get = AsyncMock(return_value=item)
-            elif call_count == 1:
-                # dispatch session
-                s.get = AsyncMock(return_value=probe_ats)
-                execute_result = MagicMock()
-                execute_result.scalar_one_or_none = MagicMock(return_value=probe_company)
-                s.execute = AsyncMock(return_value=execute_result)
-            elif call_count == 2:
-                # Success promotion: canonical company exists + canonical AtsSource exists
-                q_item_copy = MagicMock(spec=CompanyDiscoveryQueue)
-                q_item_copy.status = "pending"
-                execute_calls = [
-                    canonical_company,        # real company found by real_slug
-                    existing_canonical_ats,   # existing ats found for real_company_id
-                    probe_company,            # probe company found for deletion
-                ]
-                execute_result = MagicMock()
-                execute_result.scalar_one_or_none = MagicMock(side_effect=execute_calls)
-                s.execute = AsyncMock(return_value=execute_result)
-                s.get = AsyncMock(side_effect=[probe_ats, q_item_copy])
             else:
                 execute_result = MagicMock()
                 execute_result.scalar_one_or_none = MagicMock(return_value=None)
                 s.execute = AsyncMock(return_value=execute_result)
-                s.get = AsyncMock(return_value=None)
-
+                s.flush = AsyncMock()
+                s.add = MagicMock()
+                q_item_copy = MagicMock(spec=CompanyDiscoveryQueue)
+                q_item_copy.status = "pending"
+                s.get = AsyncMock(return_value=q_item_copy)
             call_count += 1
             s.__aenter__ = AsyncMock(return_value=s)
             s.__aexit__ = AsyncMock(return_value=None)
@@ -415,16 +299,10 @@ class TestProcessDiscoveryItem:
 
         mock_session_maker = MagicMock(side_effect=session_factory)
 
-        with patch(
-            "app.crawler.dispatcher.CrawlDispatcher",
-            return_value=MagicMock(dispatch=AsyncMock(return_value=dummy_jobs)),
-        ):
-            with patch("app.crawler.tasks._upsert_ats_jobs", new=AsyncMock(return_value=[])):
+        with patch("app.discovery.ats_prober.detect_ats_from_careers_page", new=AsyncMock(return_value=fingerprint_result)):
+            with patch("app.discovery.ats_prober.ATSProber.probe", new=mock_probe):
                 result = await _process_discovery_item(item_id, mock_session_maker)
 
         assert result == "resolved"
-        # Probe AtsSource was deleted (merged into canonical)
-        deleted_types = [type(d).__name__ for d in deleted_objects]
-        assert "MagicMock" in deleted_types  # probe_ats was deleted
-        # Existing canonical AtsSource was activated (is_active=True)
-        assert existing_canonical_ats.is_active is True
+        # ATSProber was NOT called because fingerprinting succeeded
+        assert len(prober_calls) == 0

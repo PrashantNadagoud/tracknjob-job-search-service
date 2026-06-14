@@ -125,8 +125,8 @@ class TestCountryToMarket:
         assert _country_to_market(cc) == "EU"
 
     @pytest.mark.parametrize("cc", ["PH", "VN", "KR", "MY", "IL", "SG", "JP", "BR", "AU"])
-    def test_other_market_returns_none(self, cc):
-        assert _country_to_market(cc) is None
+    def test_other_market_returns_other(self, cc):
+        assert _country_to_market(cc) == "OTHER"
 
     def test_case_insensitive(self):
         assert _country_to_market("de") == "EU"
@@ -215,22 +215,22 @@ class TestClassifyByGeonames:
     def test_amsterdam_returns_eu(self):
         assert classify_by_geonames("Amsterdam") == "EU"
 
-    def test_makati_returns_none(self):
-        """Makati (Philippines) → PH → OTHER market → None"""
-        assert classify_by_geonames("Makati") is None
+    def test_makati_returns_other(self):
+        """Makati (Philippines) → PH → _OTHER_COUNTRY_CODES → 'OTHER'"""
+        assert classify_by_geonames("Makati") == "OTHER"
 
-    def test_ho_chi_minh_city_returns_none(self):
-        """Ho Chi Minh City (Vietnam) → VN → OTHER market → None"""
-        assert classify_by_geonames("Ho Chi Minh City") is None
+    def test_ho_chi_minh_city_returns_other(self):
+        """Ho Chi Minh City (Vietnam) → VN → _OTHER_COUNTRY_CODES → 'OTHER'"""
+        assert classify_by_geonames("Ho Chi Minh City") == "OTHER"
 
-    def test_seoul_returns_none(self):
-        assert classify_by_geonames("Seoul") is None
+    def test_seoul_returns_other(self):
+        assert classify_by_geonames("Seoul") == "OTHER"
 
-    def test_kuala_lumpur_returns_none(self):
-        assert classify_by_geonames("Kuala Lumpur") is None
+    def test_kuala_lumpur_returns_other(self):
+        assert classify_by_geonames("Kuala Lumpur") == "OTHER"
 
-    def test_tel_aviv_returns_none(self):
-        assert classify_by_geonames("Tel Aviv") is None
+    def test_tel_aviv_returns_other(self):
+        assert classify_by_geonames("Tel Aviv") == "OTHER"
 
     def test_unknown_city_returns_none(self):
         assert classify_by_geonames("Nonexistent Xyztown") is None
