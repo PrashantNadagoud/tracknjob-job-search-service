@@ -92,10 +92,44 @@ def load_geonames_index(city_rows: list[tuple[str, str, str, int] | tuple[str, s
     logger.info("GeoNames index loaded: %d city entries", len(index))
 
 
+# Country codes that are definitively NOT US/EU/IN — classify as OTHER so they
+# don't accidentally fall through to GLOBAL via the remote work_type fallback.
+_OTHER_COUNTRY_CODES: frozenset[str] = frozenset({
+    "CA",  # Canada
+    "AU",  # Australia
+    "NZ",  # New Zealand
+    "SG",  # Singapore
+    "MY",  # Malaysia
+    "PH",  # Philippines
+    "HK",  # Hong Kong
+    "JP",  # Japan
+    "KR",  # South Korea
+    "BR",  # Brazil
+    "MX",  # Mexico
+    "AR",  # Argentina
+    "CL",  # Chile
+    "CO",  # Colombia
+    "ZA",  # South Africa
+    "NG",  # Nigeria
+    "KE",  # Kenya
+    "AE",  # UAE
+    "IL",  # Israel
+    "TR",  # Turkey
+    "PK",  # Pakistan
+    "BD",  # Bangladesh
+    "LK",  # Sri Lanka
+    "ID",  # Indonesia
+    "TH",  # Thailand
+    "VN",  # Vietnam
+    "TW",  # Taiwan
+    "CN",  # China
+})
+
+
 def _country_to_market(country_code: str) -> str | None:
     """Map an ISO country code to a geo-restriction market label.
 
-    Returns 'US', 'EU', 'IN', or None (no match — will fall through to OTHER).
+    Returns 'US', 'EU', 'IN', 'OTHER', or None (unknown — fall through to text heuristics).
     """
     cc = country_code.upper()
     if cc in ("US",):
@@ -104,6 +138,8 @@ def _country_to_market(country_code: str) -> str | None:
         return "IN"
     if cc in _EU_COUNTRY_CODES:
         return "EU"
+    if cc in _OTHER_COUNTRY_CODES:
+        return "OTHER"
     return None
 
 
@@ -203,11 +239,14 @@ def classify_listing(
     if restriction:
         return restriction
 
-    if work_type in ("remote", "fully_remote"):
+    # Only return GLOBAL when the location is truly blank/ambiguous AND the job
+    # is remote.  A non-empty location string that passed through all checks
+    # without matching means the country is simply not in our index — classify
+    # as OTHER rather than polluting every market's feed.
+    if work_type in ("remote", "fully_remote") and not (location_raw and location_raw.strip()):
         return "GLOBAL"
 
-    # Only classify as OTHER when there's a non-empty location that didn't
-    # match any known signal — empty/null location rows default to US.
+    # Non-empty location that didn't match any known signal → OTHER
     if location_raw and location_raw.strip():
         return "OTHER"
 
