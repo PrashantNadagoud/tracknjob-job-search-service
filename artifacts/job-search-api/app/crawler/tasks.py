@@ -767,7 +767,10 @@ async def _process_discovery_item(
     # Step 2b: Slow path — concurrent 7-way probe as fallback
     if match is None:
         company_dict = {"name": company_name, "website": website or ""}
-        match = await prober.probe(company_dict)
+        # YC companies never use Workday (enterprise-only, $500K+/yr license)
+        # Skip it to avoid wasting ~8s on 12 sequential robots.txt probes.
+        skip_ats = frozenset({"workday"}) if source == "yc_directory" else None
+        match = await prober.probe(company_dict, skip_ats=skip_ats)
 
     async with Session() as session:
         now = datetime.now(timezone.utc)
