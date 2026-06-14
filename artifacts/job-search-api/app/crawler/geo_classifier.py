@@ -94,6 +94,11 @@ def load_geonames_index(city_rows: list[tuple[str, str, str, int] | tuple[str, s
 
 # Country codes that are definitively NOT US/EU/IN — classify as OTHER so they
 # don't accidentally fall through to GLOBAL via the remote work_type fallback.
+_GLOBAL_PLACEHOLDERS: frozenset[str] = frozenset({
+    "remote", "worldwide", "anywhere", "global", "work from anywhere",
+    "work from home", "fully remote", "100% remote",
+})
+
 _OTHER_COUNTRY_CODES: frozenset[str] = frozenset({
     "CA",  # Canada
     "AU",  # Australia
@@ -239,11 +244,14 @@ def classify_listing(
     if restriction:
         return restriction
 
+    loc_stripped = (location_raw or "").strip().lower()
+
     # Only return GLOBAL when the location is truly blank/ambiguous AND the job
     # is remote.  A non-empty location string that passed through all checks
     # without matching means the country is simply not in our index — classify
     # as OTHER rather than polluting every market's feed.
-    if work_type in ("remote", "fully_remote") and not (location_raw and location_raw.strip()):
+    is_ambiguous = not loc_stripped or loc_stripped in _GLOBAL_PLACEHOLDERS
+    if work_type in ("remote", "fully_remote") and is_ambiguous:
         return "GLOBAL"
 
     # Non-empty location that didn't match any known signal → OTHER
