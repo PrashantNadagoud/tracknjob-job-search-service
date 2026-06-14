@@ -13,6 +13,8 @@ Responsibilities:
 
 import logging
 import uuid
+
+import httpx
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -149,6 +151,16 @@ class CrawlDispatcher:
                 await self._handle_slug_not_found(db, ats_source, exc)
             except Exception:
                 logger.exception("dispatch: failed to persist slug-not-found state")
+            return []
+        except httpx.ConnectError as exc:
+            logger.warning(
+                "dispatch: connect error (DNS/network) slug=%s ats_type=%s: %s",
+                effective_slug, ats_source.ats_type, exc,
+            )
+            try:
+                await self._handle_generic_error(db, ats_source, exc)
+            except Exception:
+                logger.exception("dispatch: failed to persist connect-error state")
             return []
         except Exception as exc:
             logger.exception(
