@@ -192,24 +192,3 @@ async def seed_yc_discovery() -> dict[str, Any]:
 
     result = celery_app.send_task("app.crawler.tasks.seed_yc_discovery")
     return {"status": "queued", "task_id": result.id}
-
-
-@router.post("/reset-rejected-discovery", response_model=None)
-async def reset_rejected_discovery(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
-    """Reset all rejected discovery queue items back to pending for re-probing.
-
-    Use this after deploying an improved probe strategy to re-attempt companies
-    that were previously rejected under the old logic.
-    """
-    result = await db.execute(
-        text("""
-            UPDATE jobs.company_discovery_queue
-            SET status = 'pending',
-                attempt_count = 0,
-                error_message = NULL,
-                last_attempted_at = NULL
-            WHERE status = 'rejected'
-        """)
-    )
-    await db.commit()
-    return {"reset_count": result.rowcount}
