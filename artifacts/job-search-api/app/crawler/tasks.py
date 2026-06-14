@@ -716,25 +716,22 @@ async def _process_discovery_item(
     item_id: uuid.UUID,
     Session: async_sessionmaker[AsyncSession],
 ) -> str:
-    """Probe a single CompanyDiscoveryQueue item via CrawlDispatcher.
+    """Probe a single CompanyDiscoveryQueue item using ATSProber.
 
-    Strategy: controlled temporary-source probe with cleanup.
-    - A probe Company (slug ``{real_slug}-probe``) and AtsSource (is_active=False)
-      are created (or reused from a previous attempt) in DB so that
-      ``CrawlDispatcher.dispatch()`` can look them up.
-    - is_active=False keeps the probe AtsSource invisible to run_crawl_pipeline.
-    - On success: the probe Company is renamed to the real slug (or reassigned),
-      AtsSource is activated, and the queue item is marked 'resolved'.
-    - On rejection (>= 3 attempts): probe Company + AtsSource are deleted.
-    - Between failed attempts (< 3): probe rows persist for the next run.
+    Strategy: probe-first, write-on-match.
+    1. Call ATSProber.probe() which concurrently checks Greenhouse, Lever, Ashby,
+       SmartRecruiters, Workday, etc. — no blind single-ATS guessing.
+    2. On match: upsert Company + AtsSource (active), mark queue item 'resolved'.
+    3. On no match after 1 attempt: mark 'rejected' immediately (ATSProber already
+       tried every known ATS type, retrying won't help).
 
-    Returns one of: 'resolved', 'failed', 'rejected', 'skipped'.
+    Returns one of: 'resolved', 'rejected', 'skipped'.
     """
-    from app.crawler.dispatcher import CrawlDispatcher
+    from app.discovery.ats_prober import ATSProber
 
-    dispatcher = CrawlDispatcher()
+    prober = ATSProber()
 
-    # Step 1: Read item details and ensure probe Company + AtsSource rows exist
+    # Step 1: Read item details
     async with Session() as session:
         item = await session.get(CompanyDiscoveryQueue, item_id)
         if item is None or item.status != "pending":
@@ -742,210 +739,111 @@ async def _process_discovery_item(
 
         company_name: str = item.company_name
         website: str | None = item.website
-        ats_type: str = item.suspected_ats or "workday"
-        suspected_slug: str | None = item.suspected_slug
-        market: str = item.market
         source: str = item.source
-        attempt_count: int = item.attempt_count or 0
+        market: str = item.market
+        now = datetime.now(timezone.utc)
 
-        probe_slug = _slugify(company_name) + "-probe"
+        # Mark as attempted immediately so beat schedule doesn't double-process
+        item.last_attempted_at = now
+        item.attempt_count = (item.attempt_count or 0) + 1
+        await session.commit()
 
-        # Reuse probe Company from a previous attempt if it exists
-        probe_company: Company | None = (
+    # Step 2: Probe all ATS types concurrently via ATSProber
+    company_dict = {"name": company_name, "website": website or ""}
+    match = await prober.probe(company_dict)
+
+    async with Session() as session:
+        now = datetime.now(timezone.utc)
+        q_item = await session.get(CompanyDiscoveryQueue, item_id)
+        if q_item is None:
+            return "skipped"
+
+        if match is None:
+            # No ATS found — mark rejected (no point retrying, all types were tried)
+            q_item.status = "rejected"
+            q_item.error_message = "ATSProber found no matching ATS"
+            await session.commit()
+            logger.info(
+                "run_discovery_queue: rejected company=%s (no ATS match)", company_name
+            )
+            return "rejected"
+
+        ats_type: str = match["ats_type"]
+        ats_slug: str = match["ats_slug"]
+        crawl_url: str | None = match.get("crawl_url")
+        crawl_config: dict | None = match.get("crawl_config")
+
+        real_slug = _slugify(company_name)
+
+        # Upsert Company
+        real_company: Company | None = (
             await session.execute(
-                select(Company).where(Company.slug == probe_slug)
+                select(Company).where(Company.slug == real_slug)
             )
         ).scalar_one_or_none()
 
-        if probe_company is None:
-            probe_company = Company(
-                slug=probe_slug,
+        if real_company is None:
+            real_company = Company(
+                slug=real_slug,
                 name=company_name,
                 website=website,
                 primary_ats_type=ats_type,
             )
-            session.add(probe_company)
+            session.add(real_company)
             await session.flush()
 
-        probe_company_id: uuid.UUID = probe_company.id
+        real_company_id: uuid.UUID = real_company.id
 
-        # Reuse probe AtsSource from a previous attempt if it exists
-        probe_ats: AtsSource | None = (
+        # Upsert AtsSource — guard against (company_id, ats_type) unique constraint
+        existing_ats: AtsSource | None = (
             await session.execute(
                 select(AtsSource).where(
-                    AtsSource.company_id == probe_company_id,
+                    AtsSource.company_id == real_company_id,
                     AtsSource.ats_type == ats_type,
                 )
             )
         ).scalar_one_or_none()
 
-        if probe_ats is None:
-            probe_ats = AtsSource(
-                company_id=probe_company_id,
+        if existing_ats is None:
+            new_ats = AtsSource(
+                company_id=real_company_id,
                 ats_type=ats_type,
-                ats_slug=suspected_slug,
+                ats_slug=ats_slug,
+                crawl_url=crawl_url,
+                crawl_config=crawl_config,
                 market=market,
                 discovery_source=source,
-                is_active=False,  # Hidden from run_crawl_pipeline until resolved
+                is_active=True,
+                last_crawled_at=None,
             )
-            session.add(probe_ats)
+            session.add(new_ats)
             await session.flush()
+            active_ats_id: uuid.UUID = new_ats.id
+        else:
+            existing_ats.is_active = True
+            existing_ats.last_crawled_at = None
+            active_ats_id = existing_ats.id
 
-        probe_ats_id: uuid.UUID = probe_ats.id
+        # Resolve queue item
+        q_item.status = "resolved"
+        q_item.resolved_company_id = real_company_id
         await session.commit()
 
-    # Step 2: Probe via CrawlDispatcher (uses probe AtsSource row in DB)
-    async with Session() as session:
-        jobs = await dispatcher.dispatch(probe_ats_id, session)
-
-    now = datetime.now(timezone.utc)
-    new_attempt_count = attempt_count + 1
-
-    if jobs:
-        # SUCCESS: promote probe entities to permanent, update queue item.
-        # Must guard against uq_ats_source(company_id, ats_type) when a real
-        # Company already exists and already has an AtsSource for this ats_type.
-        async with Session() as session:
-            real_slug = _slugify(company_name)
-
-            # Check if a canonical Company with this slug already exists
-            real_company: Company | None = (
-                await session.execute(
-                    select(Company).where(Company.slug == real_slug)
-                )
-            ).scalar_one_or_none()
-
-            if real_company is None:
-                # No canonical company: rename probe Company → real slug (in-place)
-                p_company = await session.get(Company, probe_company_id)
-                if p_company:
-                    p_company.slug = real_slug
-                real_company_id: uuid.UUID = probe_company_id
-                # Activate probe AtsSource for the renamed company
-                p_ats = await session.get(AtsSource, probe_ats_id)
-                if p_ats:
-                    p_ats.is_active = True
-                    p_ats.last_crawled_at = None
-                active_ats_id: uuid.UUID = probe_ats_id
-            else:
-                # Canonical company exists: check for existing AtsSource constraint
-                real_company_id = real_company.id
-                existing_ats: AtsSource | None = (
-                    await session.execute(
-                        select(AtsSource).where(
-                            AtsSource.company_id == real_company_id,
-                            AtsSource.ats_type == ats_type,
-                        )
-                    )
-                ).scalar_one_or_none()
-
-                if existing_ats is None:
-                    # No conflict: reassign probe AtsSource to canonical company
-                    p_ats = await session.get(AtsSource, probe_ats_id)
-                    if p_ats:
-                        p_ats.company_id = real_company_id
-                        p_ats.is_active = True
-                        p_ats.last_crawled_at = None
-                    active_ats_id = probe_ats_id
-                else:
-                    # Conflict: canonical company already has (company_id, ats_type)
-                    # Merge: delete probe AtsSource, use the existing one
-                    p_ats = await session.get(AtsSource, probe_ats_id)
-                    if p_ats:
-                        await session.delete(p_ats)
-                    # Activate existing AtsSource if it was dormant
-                    existing_ats.is_active = True
-                    existing_ats.last_crawled_at = None
-                    active_ats_id = existing_ats.id
-
-                # Delete probe Company — canonical company takes ownership
-                p_company = (
-                    await session.execute(
-                        select(Company).where(Company.slug == probe_slug)
-                    )
-                ).scalar_one_or_none()
-                if p_company:
-                    await session.delete(p_company)
-
-            # Update queue item
-            q_item = await session.get(CompanyDiscoveryQueue, item_id)
-            if q_item:
-                q_item.status = "resolved"
-                q_item.resolved_company_id = real_company_id
-                q_item.last_attempted_at = now
-                q_item.attempt_count = new_attempt_count
-
-            await session.commit()
-
-        # Re-inject correct company context into job dicts, then upsert
-        for job in jobs:
-            job.setdefault("company", company_name)
-            job["company_id"] = real_company_id
-            job["ats_source_id"] = active_ats_id
-            job["ats_type"] = ats_type
-            job.setdefault("country", market)
-
-        await _upsert_ats_jobs(jobs, Session)
-
-        logger.info(
-            "run_discovery_queue: resolved company=%s ats_type=%s jobs=%d",
-            company_name, ats_type, len(jobs),
-        )
-        return "resolved"
-
-    # FAILURE path — increment attempt_count; reject and clean up at >= 3
-    async with Session() as session:
-        q_item = await session.get(CompanyDiscoveryQueue, item_id)
-        if q_item is None:
-            return "skipped"
-
-        q_item.last_attempted_at = now
-        q_item.attempt_count = new_attempt_count
-
-        if new_attempt_count >= 3:
-            q_item.status = "rejected"
-            q_item.error_message = (
-                f"Exhausted {new_attempt_count} probe attempts for ats_type={ats_type!r}"
-            )
-
-            # Clean up probe entities — they never resolved
-            p_ats = await session.get(AtsSource, probe_ats_id)
-            if p_ats:
-                await session.delete(p_ats)
-            p_company = (
-                await session.execute(
-                    select(Company).where(Company.slug == probe_slug)
-                )
-            ).scalar_one_or_none()
-            if p_company:
-                await session.delete(p_company)
-
-            await session.commit()
-            logger.info(
-                "run_discovery_queue: rejected company=%s ats_type=%s after %d attempt(s)",
-                company_name, ats_type, new_attempt_count,
-            )
-            return "rejected"
-
-        await session.commit()
-        logger.info(
-            "run_discovery_queue: attempt %d/3 failed for company=%s ats_type=%s",
-            new_attempt_count, company_name, ats_type,
-        )
-        return "failed"
+    logger.info(
+        "run_discovery_queue: resolved company=%s ats_type=%s slug=%s",
+        company_name, ats_type, ats_slug,
+    )
+    return "resolved"
 
 
 async def _async_run_discovery_queue() -> dict[str, Any]:
     """Process up to 50 pending rows from company_discovery_queue.
 
-    Probes each candidate using the real crawler (via CrawlDispatcher).
-    Because CrawlDispatcher.dispatch() requires a real AtsSource row in the DB,
-    a temporary probe Company (slug ``{real_slug}-probe``) and AtsSource
-    (is_active=False) are created before each probe and reused across retries.
-    On success: probe entities promoted to canonical company, queue item resolved.
-    On failure: attempt_count incremented, probe rows persist for the next run.
-    On rejection (>= 3 failures): probe entities deleted and item rejected.
-    Unexpected exceptions also increment attempt_count (best-effort).
+    Each item is probed by ATSProber which concurrently checks all known ATS
+    types (Greenhouse, Lever, Ashby, SmartRecruiters, Workday, etc.).
+    On match: Company + AtsSource inserted and activated immediately.
+    On no match: item marked 'rejected' (no retries — all types already tried).
+    Unexpected exceptions mark the item as failed (best-effort).
     """
     Session = _make_session()
 
