@@ -494,70 +494,76 @@ class ATSProber:
         except Exception:
             return slug
 
+    async def _probe_workday_single(
+        self,
+        client: httpx.AsyncClient,
+        slug: str,
+        instance: str,
+        company_sem: asyncio.Semaphore,
+    ) -> dict[str, Any] | None:
+        """Probe one slug+instance combination via robots.txt."""
+        base_url = f"https://{slug}.{instance}.myworkdayjobs.com"
+        domain = _extract_domain(base_url)
+
+        async with company_sem:
+            async with _GLOBAL_SEM:
+                await _rate_limit_domain(domain)
+                try:
+                    robots_resp = await client.get(
+                        f"{base_url}/robots.txt",
+                        timeout=8.0,
+                        follow_redirects=True,
+                    )
+                except Exception as exc:
+                    logger.debug("Workday probe failed for %s on %s: %s", slug, instance, exc)
+                    return None
+
+        if robots_resp.status_code != 200 or "myworkdayjobs" not in str(robots_resp.url):
+            return None
+
+        sitemap_url = None
+        for line in robots_resp.text.splitlines():
+            if line.lower().startswith("sitemap:"):
+                sitemap_url = line.split(":", 1)[1].strip()
+                break
+
+        if not sitemap_url:
+            sitemap_url = f"{base_url}/sitemap.xml"
+
+        career_site = self._extract_career_site_name(sitemap_url, slug)
+        logger.info("Workday probe SUCCESS: %s on %s -> career_site=%s", slug, instance, career_site)
+
+        return {
+            "ats_type": "workday",
+            "ats_slug": slug,
+            "crawl_url": sitemap_url,
+            "crawl_config": {
+                "instance": instance,
+                "career_site_name": career_site,
+                "sitemap_url": sitemap_url,
+            },
+        }
+
     async def _probe_workday(self, client: httpx.AsyncClient, base_slug: str, company_sem: asyncio.Semaphore) -> dict[str, Any] | None:
-        """
-        Workday probe using robots.txt/sitemap approach (most reliable, no CSRF needed).
-        
-        Strategy:
-        1. Try instances wd5, wd1, wd3, wd6, wd2 until robots.txt returns 200
-        2. Parse robots.txt to extract sitemap URL
-        3. Extract career_site_name from sitemap URL
-        4. Return crawl_config with instance, career_site_name, and sitemap_url
-        """
+        """Probe all Workday slug+instance combinations concurrently."""
         workday_variants = [
             base_slug,
             f"{base_slug}careers",
             f"{base_slug}ext",
             f"{base_slug}global",
         ]
-        
-        for slug in workday_variants:
-            for instance in ["wd5", "wd1", "wd3", "wd6", "wd2"]:
-                base_url = f"https://{slug}.{instance}.myworkdayjobs.com"
-                domain = _extract_domain(base_url)
-                
-                async with company_sem:
-                    async with _GLOBAL_SEM:
-                        await _rate_limit_domain(domain)
-                        try:
-                            # Check robots.txt — fast way to confirm Workday instance exists
-                            robots_resp = await client.get(
-                                f"{base_url}/robots.txt",
-                                timeout=8.0,
-                                follow_redirects=True
-                            )
-                            
-                            if robots_resp.status_code == 200 and "myworkdayjobs" in str(robots_resp.url):
-                                # Extract sitemap URL from robots.txt
-                                sitemap_url = None
-                                for line in robots_resp.text.splitlines():
-                                    if line.lower().startswith("sitemap:"):
-                                        sitemap_url = line.split(":", 1)[1].strip()
-                                        break
-                                
-                                if not sitemap_url:
-                                    # Fallback: try standard sitemap location
-                                    sitemap_url = f"{base_url}/sitemap.xml"
+        instances = ["wd5", "wd1", "wd3"]
 
-                                # Extract career_site_name via hardened helper
-                                career_site = self._extract_career_site_name(sitemap_url, slug)
-                                
-                                logger.info(f"Workday probe SUCCESS: {slug} on {instance} -> career_site={career_site}")
-                                
-                                return {
-                                    "ats_type": "workday",
-                                    "ats_slug": slug,
-                                    "crawl_url": sitemap_url,
-                                    "crawl_config": {
-                                        "instance": instance,
-                                        "career_site_name": career_site,
-                                        "sitemap_url": sitemap_url
-                                    }
-                                }
-                        except Exception as e:
-                            logger.debug(f"Workday probe failed for {slug} on {instance}: {e}")
-                            continue
-        
+        tasks = [
+            self._probe_workday_single(client, slug, instance, company_sem)
+            for slug in workday_variants
+            for instance in instances
+        ]
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, dict):
+                return result
         return None
 
     async def probe(self, company: dict[str, Any]) -> dict[str, Any] | None:
